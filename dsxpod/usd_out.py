@@ -50,7 +50,9 @@ def configure(data_root=None, include_proxy=True):
     匯出可攜套件用：在暫存資料夾複製資產後呼叫，USD 內的相對路徑在 zip 裡也能解析。data_root=None 還原成 repo 的 data/。"""
     global OUT_DIR, OUT, VERTIV, GB300, ASSETS, CONTAINER_ASSET, COOLER_ASSET, CAMPUS, INCLUDE_PROXY
     d = Path(data_root) if data_root else ROOT / "data"
-    OUT_DIR = d / "twin"; OUT_DIR.mkdir(parents=True, exist_ok=True); OUT = OUT_DIR / "pod.usda"; CAMPUS = OUT_DIR / "campus.usda"
+    OUT_DIR = d / "twin"; OUT = OUT_DIR / "pod.usda"; CAMPUS = OUT_DIR / "campus.usda"
+    try: OUT_DIR.mkdir(parents=True, exist_ok=True)   # 還原到 repo data/ 時，部署環境唯讀 → 略過（匯出只寫暫存資料夾）
+    except OSError: pass
     VERTIV = d / "simready_assets" / "vertiv"; GB300 = d / "simready_assets" / "nvidia" / "GB300"
     ASSETS = d / "assets" / "dsx_pod"; CONTAINER_ASSET = ASSETS / "container.usda"; COOLER_ASSET = ASSETS / "cooler_module.usda"
     INCLUDE_PROXY = include_proxy

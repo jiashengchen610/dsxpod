@@ -14,7 +14,9 @@ import argparse, csv, io, math, time, urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "data" / "weather"; OUT.mkdir(parents=True, exist_ok=True)
+OUT = ROOT / "data" / "weather"
+try: OUT.mkdir(parents=True, exist_ok=True)       # 部署環境（Vercel）檔案系統唯讀：沒有氣象快取也要能 import
+except OSError: pass
 
 # 六個示範場址（2026-10-25 定案）
 SITES = {
