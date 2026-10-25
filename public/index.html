@@ -10,7 +10,13 @@
 </head>
 <body>
 <canvas id="scene"></canvas>
-<div id="loading" class="loading">載入模型與資料…</div>
+<div id="loading" class="loading" role="progressbar" aria-label="載入進度" aria-valuemin="0" aria-valuemax="100">
+  <div class="ld">
+    <div class="ld-title">DSX POD 場址模擬</div>
+    <div class="ld-bar"><i id="ldFill"></i></div>
+    <div class="ld-row"><span id="ldMsg">載入 3D 引擎與圖表程式庫…</span><span id="ldPct"></span></div>
+  </div>
+</div>
 
 <button class="menu-btn panel" id="menuBtn" aria-label="設定選單">☰</button>
 <header class="brand panel">

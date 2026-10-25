@@ -19,6 +19,9 @@ const DETAIL_DIST = { high: 260, lite: 140 };                   // 鏡頭距離 
 const ALWAYS_DETAIL = { high: 56, lite: 24 };                   // POD 數不超過這個時，不論遠近都畫細節模型
 const ACCENT = 0x76b900;
 const subScale = s => Math.max(0.4, Math.min(1, s.l / 40));     // 小陣列：變電站等比縮小（接近箱式變電站的量體）
+// 地面疊層（鋪面、基座、道路、路肩、地界）：幾公分的高差在遠景分不出深度 → 一閃一閃（z-fighting）。
+// 用 polygonOffset 固定上下順序（layer 越大越上面），再配合相機近平面隨距離調整（start() 裡）。
+const flat = (mat, layer) => Object.assign(mat, { polygonOffset: true, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer * 4 });
 
 // 六個場址的地景（依柯本氣候：Cfa 桃園、Af 柔佛、BWh 鳳凰城、Cfa 達拉斯、Cfb 都柏林、Dfb 奧斯陸）
 export const ENV = {
@@ -206,10 +209,10 @@ export class PodScene {
     this.onQualityChange && this.onQualityChange(q, why);
   }
 
-  async load(base = 'assets/') {
+  async load(base = 'assets/', onProgress = null) {
     const loader = new GLTFLoader();
     const grab = async (f, dy = 0) => {
-      const g = await loader.loadAsync(base + f); const parts = [];
+      const g = await loader.loadAsync(base + f, e => onProgress && onProgress(f, e.loaded, e.total)); const parts = [];
       g.scene.updateMatrixWorld(true);
       g.scene.traverse(o => { if (o.isMesh) { const geo = o.geometry.clone(); geo.applyMatrix4(o.matrixWorld); if (dy) geo.translate(0, dy, 0); const m = o.material.clone(); m.side = THREE.DoubleSide;
         const lite = new THREE.MeshLambertMaterial({ color: m.color, map: m.map || null, side: THREE.DoubleSide, vertexColors: m.vertexColors, flatShading: m.flatShading });   // GLB 沒有法線 → GLTFLoader 開了 flatShading，要一起帶
@@ -267,9 +270,9 @@ export class PodScene {
     const req = layout.requested || {};
     const [bx, by] = req.site_l ? [req.site_l, req.site_w] : [sx, sy];
     const t = this.gravelTex.clone(); t.needsUpdate = true; t.repeat.set(bx / 24, by / 24);
-    const site = new THREE.Mesh(new THREE.PlaneGeometry(bx, by), new THREE.MeshStandardMaterial({ map: t, roughness: 1 }));
+    const site = new THREE.Mesh(new THREE.PlaneGeometry(bx, by), flat(new THREE.MeshStandardMaterial({ map: t, roughness: 1 }), 1));
     site.rotation.x = -Math.PI / 2; site.position.set(-SETBACK + bx / 2, 0.03, -(-SETBACK + by / 2)); site.receiveShadow = true; this.pads.add(site);
-    const padMat = new THREE.MeshStandardMaterial({ color: 0xb9bab3, roughness: 0.85 });
+    const padMat = flat(new THREE.MeshStandardMaterial({ color: 0xb9bab3, roughness: 0.85 }), 3);
     for (const b of layout.blocks) {
       const pad = new THREE.Mesh(new THREE.PlaneGeometry(b.length + 5, b.width + 5), padMat); pad.rotation.x = -Math.PI / 2;
       pad.position.set(b.x + b.length / 2, 0.06, -(b.y + b.width / 2)); pad.receiveShadow = true; this.pads.add(pad);
@@ -298,7 +301,7 @@ export class PodScene {
     const x0 = -SETBACK, z0 = SETBACK, x1 = x0 + bx, z1 = z0 - by;   // three 座標
     const span = Math.max(bx, by);
     const w = Math.max(0.5, span / 320);
-    const mat = new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.9, depthWrite: false });
+    const mat = flat(new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.9, depthWrite: false }), 6);
     const strip = (len, along) => new THREE.Mesh(new THREE.PlaneGeometry(along === 'x' ? len + w : w, along === 'x' ? w : len + w).rotateX(-Math.PI / 2), mat);
     for (const [x, z, len, a] of [[(x0 + x1) / 2, z0, bx, 'x'], [(x0 + x1) / 2, z1, bx, 'x'], [x0, (z0 + z1) / 2, by, 'z'], [x1, (z0 + z1) / 2, by, 'z']]) {
       const m = strip(len, a); m.position.set(x, 0.12, z); m.renderOrder = 2; G.add(m);
@@ -467,21 +470,21 @@ export class PodScene {
     if (this.roads) { this.roads.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); }); this.scene.remove(this.roads); }
     const G = this.roads = new THREE.Group(); this.scene.add(G);
     const { x0, x1, z1 } = this.siteRect;
-    const concrete = new THREE.MeshStandardMaterial({ color: 0xa9aaa3, roughness: 0.85 });
-    const curb = new THREE.MeshStandardMaterial({ color: 0xd2d3cc, roughness: 0.8 });
-    const flat = (w, d, x, z, y, mat) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), mat); m.position.set(x, y, z); m.receiveShadow = true; G.add(m); return m; };
+    const concrete = flat(new THREE.MeshStandardMaterial({ color: 0xa9aaa3, roughness: 0.85 }), 2);
+    const curb = flat(new THREE.MeshStandardMaterial({ color: 0xd2d3cc, roughness: 0.8 }), 4);
+    const strip = (w, d, x, z, y, mat) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), mat); m.position.set(x, y, z); m.receiveShadow = true; G.add(m); return m; };
     // 1) 廠內服務道路：退縮帶裡、第一排變電站正門前，橫貫基地
-    flat(x1 - x0 - 3, SVC_W, (x0 + 1.5 + x1) / 2, ROAD_Z, 0.09, concrete);
-    for (const dz of [-SVC_W / 2, SVC_W / 2]) flat(x1 - x0 - 3, 0.25, (x0 + 1.5 + x1) / 2, ROAD_Z + dz, 0.1, curb);
+    strip(x1 - x0 - 3, SVC_W, (x0 + 1.5 + x1) / 2, ROAD_Z, 0.09, concrete);
+    for (const dz of [-SVC_W / 2, SVC_W / 2]) strip(x1 - x0 - 3, 0.25, (x0 + 1.5 + x1) / 2, ROAD_Z + dz, 0.1, curb);
     // 2) 園區：每排區塊前（變電站門前）的東西向道路、區塊之間的南北向道路
     if (layout.mode === 'campus') {
       const b0 = layout.blocks[0]; const cellX = layout.blocks.find(b => b.x > 0)?.x; const rowsY = [...new Set(layout.blocks.map(b => b.substation.y))].filter(y => y > 0);
-      for (const y of rowsY) flat(x1 - x0 - 3, 10, (x0 + 1.5 + x1) / 2, -(y - 6), 0.09, concrete);
-      if (cellX) for (let x = cellX; x < x1; x += cellX) flat(10, (SETBACK - 2) - (z1 + 2), x - 6, ((SETBACK - 2) + (z1 + 2)) / 2, 0.085, concrete);
+      for (const y of rowsY) strip(x1 - x0 - 3, 10, (x0 + 1.5 + x1) / 2, -(y - 6), 0.09, concrete);
+      if (cellX) for (let x = cellX; x < x1; x += cellX) strip(10, (SETBACK - 2) - (z1 + 2), x - 6, ((SETBACK - 2) + (z1 + 2)) / 2, 0.085, concrete);
     }
     // 3) 大門（南側）：門柱、柵欄機、警衛亭；廠內混凝土車道接到圍籬，圍籬外換柏油接公路
     const { z0 } = this.siteRect; const gx = this.gateX;
-    flat(2 * GATE - 1, z0 - (ROAD_Z + SVC_W / 2), gx, (z0 + ROAD_Z + SVC_W / 2) / 2, 0.095, concrete);
+    strip(2 * GATE - 1, z0 - (ROAD_Z + SVC_W / 2), gx, (z0 + ROAD_Z + SVC_W / 2) / 2, 0.095, concrete);
     const post = new THREE.MeshStandardMaterial({ color: 0x8d9398, metalness: 0.6, roughness: 0.5 });
     for (const dx of [-GATE, GATE]) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.8, 0.5), post); m.position.set(gx + dx, 1.4, z0); m.castShadow = true; G.add(m); }
     const arm = new THREE.Mesh(new THREE.BoxGeometry(GATE * 1.7, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0xd8382b, roughness: 0.5 }));
@@ -490,13 +493,13 @@ export class PodScene {
     booth.position.set(gx + GATE + 2.2, 1.3, z0 - 2.0); booth.castShadow = true; G.add(booth);
     // 4) 廠外公路：柏油 + 標線 + 路肩，東西向延伸到霧裡；大門前一段柏油引道
     const t = asphaltTex(); t.repeat.set(2 * ROAD_LEN / 24, 1);
-    const asphalt = new THREE.MeshStandardMaterial({ map: t, roughness: 0.95 });
-    const plain = new THREE.MeshStandardMaterial({ color: 0x3b3d3f, roughness: 0.95 });
-    const shoulder = new THREE.MeshStandardMaterial({ color: this.envKey === 'phoenix' ? 0xb7976f : 0x8a826e, roughness: 1 });
+    const asphalt = flat(new THREE.MeshStandardMaterial({ map: t, roughness: 0.95 }), 3);
+    const plain = flat(new THREE.MeshStandardMaterial({ color: 0x3b3d3f, roughness: 0.95 }), 3);
+    const shoulder = flat(new THREE.MeshStandardMaterial({ color: this.envKey === 'phoenix' ? 0xb7976f : 0x8a826e, roughness: 1 }), 2);
     const cx = (x0 + x1) / 2;
-    flat(2 * ROAD_LEN, PUB_W, cx, PUB_Z, 0.1, asphalt);
-    for (const dz of [-(PUB_W / 2 + 0.9), PUB_W / 2 + 0.9]) flat(2 * ROAD_LEN, 1.8, cx, PUB_Z + dz, 0.07, shoulder);
-    flat(2 * GATE + 2, PUB_Z - PUB_W / 2 - z0, gx, (z0 + PUB_Z - PUB_W / 2) / 2, 0.1, plain);
+    strip(2 * ROAD_LEN, PUB_W, cx, PUB_Z, 0.1, asphalt);
+    for (const dz of [-(PUB_W / 2 + 0.9), PUB_W / 2 + 0.9]) strip(2 * ROAD_LEN, 1.8, cx, PUB_Z + dz, 0.07, shoulder);
+    strip(2 * GATE + 2, PUB_Z - PUB_W / 2 - z0, gx, (z0 + PUB_Z - PUB_W / 2) / 2, 0.1, plain);
   }
 
   _gateX(layout, x0, x1) {                                        // 大門對準第一座變電站開關室（樣板 x = 34 m），沒有就放中間
@@ -568,6 +571,12 @@ export class PodScene {
       if (!moved && !this.dirty) { last = 0; return; }                    // 按需渲染：沒變化就不畫
       this.dirty = false;
       this.sky.position.copy(this.camera.position); const lod = this.updateLod(); onFrame && onFrame(lod);
+      // 近平面隨鏡頭距離調整：遠景時把 near 推遠，深度精度集中在看得到的範圍（解決地面疊層閃爍）
+      const dist = this.camera.position.distanceTo(this.controls.target);
+      const near = THREE.MathUtils.clamp(dist / 120, 0.3, 30), far = Math.max(6000, dist * 14);
+      if (Math.abs(near - this.camera.near) > this.camera.near * 0.15 || far > this.camera.far * 1.2 || far < this.camera.far * 0.6) {
+        this.camera.near = near; this.camera.far = far; this.camera.updateProjectionMatrix();
+      }
       this.renderer.render(this.scene, this.camera);
       // 自動降級：連續互動中量 60 個影格，中位數 > 45 ms（約 < 22 fps）就切省電畫質（只做一次）
       if (this.autoDowngrade && this.quality === 'high' && last && now - last < 250) {

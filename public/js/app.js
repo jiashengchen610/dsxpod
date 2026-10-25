@@ -20,12 +20,12 @@ const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120,
 const MQ = matchMedia('(max-width: 900px)');
 const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open'); };
 applyMobile(); MQ.addEventListener?.('change', () => { applyMobile(); setTimeout(() => { Object.values(charts).forEach(c => c.resize()); scene && scene.frame(); }, 300); });
-// 畫質：網址 q= > 使用者上次選的 > 自動（觸控 / 窄螢幕 / 記憶體或核心少 → 省電；其餘高，跑起來太慢會自動降）
+// 畫質：網址 q= > 使用者上次選的 > 預設高畫質（太慢會自動降到輕量）
 function initialQuality() {
   const q = new URLSearchParams(location.search).get('q'); if (q === 'high' || q === 'lite') return { q, auto: false };
   const saved = store.get('quality', null); if (saved === 'high' || saved === 'lite') return { q: saved, auto: false };
-  const weak = matchMedia('(pointer: coarse)').matches || innerWidth < 900 || (navigator.deviceMemory && navigator.deviceMemory <= 4) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
-  return { q: weak ? 'lite' : 'high', auto: true };
+  // 預設一律高畫質（實機 iPhone 13 mini 跑得動）；跑起來太慢（中位數 < 約 22 fps）才自動降到輕量
+  return { q: 'high', auto: true };
 }
 const QUALITY = initialQuality();
 // 網址參數可覆寫（分享 / 測試用）：?site=phoenix&mw=200&cooling=evaporative&supply=t32&tab=cmp&nav=cool
@@ -288,20 +288,52 @@ $('#exportBtn').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- 啟動
+// ---------------------------------------------------------------- 載入進度
+// 權重：程式庫（app.js 能跑就代表已載完）、氣候摘要、結果表、兩個 GLB、建場景。CDN 可能壓縮傳輸 → 總量取 content-length 或預估值，進度一律夾在 0–1。
+const LOAD = { libs: [0.12, 1], climate: [0.03, 0], grid: [0.27, 0], 'container.glb': [0.15, 0], 'cooler_module.glb': [0.25, 0], build: [0.18, 0] };
+const EST = { climate: 15e3, grid: 461e3, 'container.glb': 279e3, 'cooler_module.glb': 503e3 };
+const MSG = { climate: '載入氣候資料…', grid: '載入能耗結果表…', 'container.glb': '載入貨櫃模型…', 'cooler_module.glb': '載入散熱模組模型…', build: '建立場景（地景、道路、變電站）…' };
+function progress(key, frac) {
+  LOAD[key][1] = Math.max(LOAD[key][1], Math.min(1, frac || 0));
+  const t = Object.values(LOAD).reduce((s, [w, f]) => s + w * f, 0);
+  const bar = $('.ld-bar'); bar.classList.add('det'); $('#ldFill').style.width = `${(t * 100).toFixed(1)}%`;
+  $('#ldPct').textContent = `${Math.floor(t * 100)}%`; $('#loading').setAttribute('aria-valuenow', Math.floor(t * 100));
+  const busy = Object.keys(LOAD).find(k => LOAD[k][1] < 1); if (busy) $('#ldMsg').textContent = MSG[busy] || '';
+}
+async function fetchJSON(url, key) {
+  const r = await fetch(url); if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+  const total = +r.headers.get('content-length') || EST[key];
+  if (!r.body || !r.body.getReader) { const j = await r.json(); progress(key, 1); return j; }
+  const reader = r.body.getReader(), chunks = []; let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; progress(key, got / Math.max(total, got * 1.05)); }
+  const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
+  progress(key, 1); return JSON.parse(new TextDecoder().decode(buf));
+}
+const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // 讓進度條在同步重活之前先畫出來
+
 (async function main() {
-  [CLIM, GRID] = await Promise.all([fetch('data/climate_summary.json').then(r => r.json()), fetch('data/results_grid.json').then(r => r.json())]);
-  scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto }); await scene.load();
+  progress('libs', 1);
+  [CLIM, GRID] = await Promise.all([fetchJSON('data/climate_summary.json', 'climate'), fetchJSON('data/results_grid.json', 'grid')]);
+  scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto });
+  await scene.load('assets/', (f, loaded, total) => progress(f, loaded / Math.max(total || EST[f], loaded * 1.05)));
+  progress('container.glb', 1); progress('cooler_module.glb', 1); progress('build', 0.15); await paint();
   const qualityUI = () => { $$('#qualitySeg button').forEach(b => { b.classList.toggle('on', b.dataset.q === scene.quality); b.onclick = () => { store.set('quality', b.dataset.q); scene.setQuality(b.dataset.q); qualityUI(); }; });
     $('#qualityHint').textContent = scene.quality === 'lite' ? '無陰影、簡化材質與植被' : '陰影、天空光、完整植被'; };
   scene.onQualityChange = (q, why) => { qualityUI(); if (why) $('#qualityHint').textContent = why; };
   qualityUI();
   tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply');
+  progress('build', 0.4); await paint();
   update(); scene.frame();
+  progress('build', 0.9); await paint();
   if (Q.get('tab')) $(`#data .tab[data-tab="${Q.get('tab')}"]`)?.click();
   if (Q.get('nav')) $(`#nav .tab[data-tab="${Q.get('nav')}"]`)?.click();
   if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
   scene.setVisible({ shell: true, cooler: true, rack: false });
   if (Q.get('panel') === 'menu') document.body.classList.add('menu-open'); if (Q.get('panel') === 'sheet') document.body.classList.add('sheet-open');   // 測試 / 分享用
   scene.start();
+  progress('build', 1); await paint();
   $('#loading').classList.add('done'); checkApi();
-})();
+})().catch(e => {                                            // 載入失敗：進度條轉紅並顯示原因
+  console.error(e); $('#loading').classList.add('err'); $('.ld-bar').classList.add('det');
+  $('#ldMsg').textContent = '載入失敗：' + (e && e.message || e); $('#ldPct').textContent = '';
+});

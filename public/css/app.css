@@ -6,7 +6,17 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;overflow:hidden}
 #scene{position:fixed;inset:0;display:block;width:100%;height:100%}
 .panel{position:fixed;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 8px 30px #0006}
-.loading{position:fixed;inset:0;display:grid;place-items:center;color:var(--muted);font-size:15px;background:var(--bg);z-index:50;transition:opacity .3s}
+.loading{position:fixed;inset:0;display:grid;place-items:center;color:var(--muted);font-size:13px;background:var(--bg);z-index:50;transition:opacity .4s}
+.ld{width:min(320px,80vw)}
+.ld-title{color:var(--text);font-weight:650;font-size:15px;margin-bottom:12px}
+.ld-title::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accent);margin-right:8px;vertical-align:1px}
+.ld-bar{height:4px;border-radius:2px;background:#ffffff14;overflow:hidden;position:relative}
+.ld-bar i{position:absolute;inset:0 auto 0 0;width:30%;background:var(--accent);border-radius:2px;animation:ld-indet 1.1s ease-in-out infinite}
+.ld-bar.det i{animation:none;transition:width .25s ease-out}
+@keyframes ld-indet{0%{left:-30%}100%{left:100%}}
+.ld-row{display:flex;justify-content:space-between;margin-top:8px;font-variant-numeric:tabular-nums}
+.ld-row #ldPct{color:var(--text)}
+.loading.err .ld-bar i{background:var(--bad);animation:none;width:100%}
 .loading.done{opacity:0;pointer-events:none}
 .brand{left:16px;top:16px;padding:10px 14px;max-width:calc(100% - 32px)}
 .brand-title{font-weight:650;font-size:15px;letter-spacing:.01em}
