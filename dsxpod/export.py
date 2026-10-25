@@ -21,7 +21,7 @@ from .weather import SITES
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-GRID = ROOT / "web" / "data" / "results_grid.json"
+GRID = next((d / "data" / "results_grid.json" for d in (ROOT / "web", ROOT / "public") if (d / "data" / "results_grid.json").exists()), ROOT / "web" / "data" / "results_grid.json")
 VERTIV_ASSETS = ("XDU2300AA0S000F", "MCV430_6FAN", "APM2")
 
 

@@ -19,7 +19,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
-WEB = ROOT / "web"
+# 前端目錄：本機是 web/；Vercel 部署包放在 public/（後端框架模式下 public/ 由 CDN 直接提供，這裡是保險）
+WEB = next((d for d in (ROOT / "web", ROOT / "public") if (d / "index.html").exists()), ROOT / "web")
+GRID_JSON = next((d / "data" / "results_grid.json" for d in (ROOT / "web", ROOT / "public") if (d / "data" / "results_grid.json").exists()), ROOT / "web" / "data" / "results_grid.json")
 app = FastAPI(title="DSX POD MVP", version="0.1")
 
 
@@ -35,7 +37,7 @@ class Req(BaseModel):
 
 @app.get("/api/health")
 def health():
-    return dict(ok=True, weather_cache=(ROOT / "data" / "weather" / "johor_2005_2024.csv").exists(), grid=(WEB / "data" / "results_grid.json").exists())
+    return dict(ok=True, weather_cache=(ROOT / "data" / "weather" / "johor_2005_2024.csv").exists(), grid=GRID_JSON.exists())
 
 
 @app.post("/api/export")
@@ -60,7 +62,7 @@ def simulate(req: Req):
     return JSONResponse(r)
 
 
-if WEB.exists():
+if (WEB / "index.html").exists():
     app.mount("/", StaticFiles(directory=str(WEB), html=True), name="web")
 
 
