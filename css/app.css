@@ -70,3 +70,5 @@ th{color:var(--muted);font-weight:500}tr.sel td{background:#76b9001a}
   .nav{width:calc(100% - 32px);max-height:40%}
   .view{bottom:16px;right:16px;flex-wrap:wrap}
 }
+#sumNotes b.warn{font-size:inherit;margin:0}
+.kpi.wide{grid-column:1/-1}

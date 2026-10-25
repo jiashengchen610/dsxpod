@@ -3,7 +3,8 @@
 單位與假設：
   - 輸入電量 = IT 銘牌容量。1 個 POD = 7 櫃 × 136 kW = 0.952 MW（GB300 代理；Vera Rubin 數字公開後換）。
   - POD 間距：長邊並排 3 m（維修門淨空 1.2 m + 通道）；端牆之間 6 m。
-  - 50 MW 以下是單一陣列；超過 50 MW 切成區塊：每塊 ≤ 50 MW（53 個 POD），區塊間 12 m 道路，每塊一側留 20 m 變電站 / 配電帶。
+  - 一個標準區塊 = 4 × 14 = 56 POD（約 53 MW）。以內是單一陣列；超過就切區塊，區塊間 12 m 道路。每塊（含單一陣列）一側留 20 m 變電站 / 配電帶。
+  - 陣列一律補成完整矩形（不留缺角），所以配置容量 ≥ 要求容量；1 GW 上限時改成往下取整列。
   - 上限：1 GW、基地 1,500 × 1,500 m（NVIDIA 稱 DSX POD 鎖定 1 GW 以下部署；再往上電網與熱島都不是篩選模型能處理的）。
   - 基地輸入時退縮 10 m。
 回傳 dict 可直接給 usd_out.build(layout=...) 與前端。
@@ -14,87 +15,104 @@ POD_MW = 7 * 136 / 1000.0                  # 0.952 MW IT 銘牌
 POD_L, POD_W = 12.192, 2.438
 GAP_Y, GAP_X = 3.0, 6.0                    # 長邊並排間距、端牆間距
 PITCH_X, PITCH_Y = POD_L + GAP_X, POD_W + GAP_Y
-BLOCK_MW = 50.0
-BLOCK_PODS = 53                            # ≈ 50.5 MW；detail 模式最多也是這麼多
+BLOCK_ROWS, BLOCK_COLS = 4, 14            # 標準區塊 4 列（沿 x）× 14 個（沿 y）= 56 POD ≈ 53.3 MW，約 73 × 76 m
+BLOCK_PODS = BLOCK_ROWS * BLOCK_COLS
+BLOCK_MW = BLOCK_PODS * POD_MW
 ROAD = 12.0
 SUBSTATION_STRIP = 20.0
 SETBACK = 10.0
 MAX_MW = 1000.0
 MAX_SIDE_M = 1500.0
-DETAIL_MAX_MW = 50.0                       # 超過就切區塊、前端換 LOD、園區層標示篩選等級
+DETAIL_MAX_MW = BLOCK_MW                   # 一個區塊以內 = detail；超過就切區塊、前端換 LOD
+WASTE_W = 0.05                             # 補齊陣列時每多一個 POD 的懲罰（相對於長寬比）
 
 
 def _grid(n):
-    """n 個 POD 排成接近正方形的 (列數 rows 沿 x, 每列 cols 沿 y)。"""
+    """至少放 n 個 POD 的完整矩形陣列 (rows 沿 x, cols 沿 y)，rows*cols ≤ BLOCK_PODS；接近正方形、補的 POD 少者優先。"""
     best = None
-    for rows in range(1, n + 1):
+    for rows in range(1, BLOCK_PODS + 1):
         cols = math.ceil(n / rows)
+        if rows * cols > BLOCK_PODS: continue
         w, h = rows * PITCH_X, cols * PITCH_Y
-        score = max(w, h) / min(w, h) + (rows * cols - n) * 0.05
-        if best is None or score < best[0]: best = (score, rows, cols)
+        score = max(w, h) / min(w, h) + (rows * cols - n) * WASTE_W
+        if best is None or score < best[0] - 1e-12: best = (score, rows, cols)
     return best[1], best[2]
 
 
-def block_dims(n_pods):
-    rows, cols = _grid(n_pods)
-    return rows, cols, rows * PITCH_X - GAP_X, cols * PITCH_Y - GAP_Y
+def block_dims(rows, cols):
+    return rows * PITCH_X - GAP_X, cols * PITCH_Y - GAP_Y
 
 
 def plan(mw=None, site_l=None, site_w=None):
-    """擇一輸入：mw（IT 銘牌）或 site_l × site_w（m）。回傳佈局。"""
+    """擇一輸入：mw（IT 銘牌）或 site_l × site_w（m）。回傳佈局。
+    陣列一律補成完整矩形（不留缺角）：所以配置的 POD 數 ≥ 需求，前端顯示「要求 X MW → 配置 Y MW」。"""
     warnings = []
     if mw is not None:
         mw = float(mw)
         if mw > MAX_MW: warnings.append(f"超過上限 {MAX_MW:g} MW，已截到上限"); mw = MAX_MW
-        n_pods = max(1, math.ceil(mw * 1000 / (POD_MW * 1000)))
-        return _layout(n_pods, warnings, requested=dict(mw=mw))
+        need = max(1, math.ceil(mw / POD_MW - 1e-9))
+        return _layout(need, warnings, requested=dict(mw=mw))
     L, W = float(site_l), float(site_w)
     if max(L, W) > MAX_SIDE_M: warnings.append(f"基地邊長超過 {MAX_SIDE_M:g} m，已截到上限"); L, W = min(L, MAX_SIDE_M), min(W, MAX_SIDE_M)
     uL, uW = L - 2 * SETBACK, W - 2 * SETBACK
-    # 先試單一陣列，再試區塊
-    rows, cols = int((uL + GAP_X) // PITCH_X), int((uW + GAP_Y) // PITCH_Y)
-    n_single = max(0, rows * cols)
-    if n_single <= BLOCK_PODS:
-        n = n_single
-    else:
-        b_rows, b_cols, bL, bW = block_dims(BLOCK_PODS)
-        nbx = int((uL + ROAD) // (bL + ROAD)); nby = int((uW + ROAD) // (bW + SUBSTATION_STRIP + ROAD))
-        n = nbx * nby * BLOCK_PODS
-        n = min(n, math.floor(MAX_MW / POD_MW))
-    if n == 0: warnings.append("基地太小，放不下一個 POD"); n = 1
-    return _layout(n, warnings, requested=dict(site_l=L, site_w=W))
+    rows, cols = max(0, int((uL + GAP_X) // PITCH_X)), max(0, int((uW - SUBSTATION_STRIP + GAP_Y) // PITCH_Y))   # 單一陣列也留變電帶
+    bL, bW = block_dims(BLOCK_ROWS, BLOCK_COLS)
+    nbx, nby = max(0, int((uL + ROAD) // (bL + ROAD))), max(0, int((uW + ROAD) // (bW + SUBSTATION_STRIP + ROAD)))
+    max_blocks = int(MAX_MW // BLOCK_MW)
+    if rows * cols > BLOCK_PODS and nbx * nby >= 2:
+        if nbx * nby > max_blocks:
+            warnings.append(f"基地可放 {nbx * nby} 個區塊，超過 1 GW 上限，只放 {max_blocks} 個（集中排列）")
+        capped = nbx * nby > max_blocks
+        n_blocks = min(nbx * nby, max_blocks)
+        return _layout(n_blocks * BLOCK_PODS, warnings, requested=dict(site_l=L, site_w=W), nbx=None if capped else nbx)
+    # 單一陣列：照基地切出的列數 × 個數，但不超過一個區塊
+    rows, cols = min(rows, BLOCK_PODS), min(cols, BLOCK_PODS)
+    while rows * cols > BLOCK_PODS:
+        if rows * PITCH_X >= cols * PITCH_Y: rows -= 1
+        else: cols -= 1
+    if rows * cols == 0: warnings.append("基地太小，放不下一個 POD"); rows = cols = 1
+    return _layout(rows * cols, warnings, requested=dict(site_l=L, site_w=W), grid=(rows, cols))
 
 
-def _layout(n_pods, warnings, requested):
-    per_block = BLOCK_PODS
-    mw = n_pods * POD_MW
-    if n_pods <= BLOCK_PODS:
-        rows, cols, bL, bW = block_dims(n_pods)
-        pods = [dict(block=0, x=(i // cols) * PITCH_X, y=(i % cols) * PITCH_Y) for i in range(n_pods)]
-        blocks = [dict(index=0, x=0.0, y=0.0, n_pods=n_pods, rows=rows, cols=cols, length=bL, width=bW)]
-        site = (bL + 2 * SETBACK, bW + 2 * SETBACK)
+def _layout(need, warnings, requested, grid=None, nbx=None):
+    """need = 至少要幾個 POD。grid 指定單一陣列的 (rows, cols)；nbx 指定區塊每排幾塊。"""
+    if need <= BLOCK_PODS:
+        rows, cols = grid or _grid(need)
+        n_pods = rows * cols
+        bL, bW = block_dims(rows, cols)
+        oy = SUBSTATION_STRIP                                              # 再小也要一座變電站（小場址前端縮成箱式變電站尺寸）
+        pods = [dict(block=0, x=(i // cols) * PITCH_X, y=oy + (i % cols) * PITCH_Y) for i in range(n_pods)]
+        blocks = [dict(index=0, x=0.0, y=oy, n_pods=n_pods, rows=rows, cols=cols, length=bL, width=bW,
+                       substation=dict(x=0.0, y=0.0, l=bL, w=SUBSTATION_STRIP - 4, mw=round(n_pods * POD_MW, 1)))]
+        site = (bL + 2 * SETBACK, bW + SUBSTATION_STRIP + 2 * SETBACK)
         mode = "detail"
     else:
-        n_blocks = math.ceil(n_pods / per_block)
-        rows, cols, bL, bW = block_dims(per_block)
+        full, left = divmod(need, BLOCK_PODS)
+        last_rows = math.ceil(left / BLOCK_COLS)                          # 最後一塊補成整列
+        if (full * BLOCK_PODS + last_rows * BLOCK_COLS) * POD_MW > MAX_MW + 1e-9: last_rows = left // BLOCK_COLS
+        sizes = [BLOCK_ROWS] * full + ([last_rows] if last_rows else [])
+        n_blocks = len(sizes)
+        bL, bW = block_dims(BLOCK_ROWS, BLOCK_COLS)
         cell_x, cell_y = bL + ROAD, bW + SUBSTATION_STRIP + ROAD
-        nbx = math.ceil(math.sqrt(n_blocks * cell_y / cell_x))
+        if nbx is None: nbx = math.ceil(math.sqrt(n_blocks * cell_y / cell_x))
         nby = math.ceil(n_blocks / nbx)
         blocks, pods = [], []
-        left = n_pods
-        for b in range(n_blocks):
+        for b, r in enumerate(sizes):
             bx, by = b % nbx, b // nbx
-            k = min(per_block, left); left -= k
-            r, c, l_, w_ = block_dims(k) if k < per_block else (rows, cols, bL, bW)
+            l_, w_ = block_dims(r, BLOCK_COLS)
             ox, oy = bx * cell_x, by * cell_y + SUBSTATION_STRIP
-            blocks.append(dict(index=b, x=ox, y=oy, n_pods=k, rows=r, cols=c, length=l_, width=w_, substation=dict(x=ox, y=by * cell_y, l=l_, w=SUBSTATION_STRIP - 4)))
-            pods += [dict(block=b, x=ox + (i // c) * PITCH_X, y=oy + (i % c) * PITCH_Y) for i in range(k)]
-        site = (nbx * cell_x - ROAD + 2 * SETBACK, nby * cell_y - ROAD + 2 * SETBACK)
+            k = r * BLOCK_COLS
+            blocks.append(dict(index=b, x=ox, y=oy, n_pods=k, rows=r, cols=BLOCK_COLS, length=l_, width=w_,
+                               substation=dict(x=ox, y=by * cell_y, l=l_, w=SUBSTATION_STRIP - 4, mw=round(k * POD_MW, 1))))
+            pods += [dict(block=b, x=ox + (i // BLOCK_COLS) * PITCH_X, y=oy + (i % BLOCK_COLS) * PITCH_Y) for i in range(k)]
+        n_pods = len(pods)
+        site = (min(nbx, n_blocks) * cell_x - ROAD + 2 * SETBACK, nby * cell_y - ROAD + 2 * SETBACK)
         mode = "campus"
-        warnings.append(f"超過 {DETAIL_MAX_MW:g} MW：切成 {n_blocks} 個區塊（每塊 ≤ {BLOCK_MW:g} MW）；園區熱島為篩選估算，關鍵場址需 CFD 驗證")
-    import math as _m
-    cross = _m.sqrt(site[0] * site[1])
-    return dict(mode=mode, n_pods=n_pods, cross_width_m=round(cross, 1), it_mw=round(mw, 3), pod_mw=POD_MW, n_blocks=len(blocks), blocks=blocks, pods=pods,
+        warnings.append(f"超過 {BLOCK_MW:.0f} MW：切成 {n_blocks} 個區塊（每塊 {BLOCK_ROWS} × {BLOCK_COLS} = {BLOCK_PODS} POD，約 {BLOCK_MW:.0f} MW，各帶一座變電站）；園區熱島為篩選估算，關鍵場址需 CFD 驗證")
+    mw = n_pods * POD_MW
+    if n_pods > need: warnings.append(f"補齊成完整陣列：需要 {need} 個 POD，配置 {n_pods} 個（{mw:.1f} MW）")
+    cross = math.sqrt(site[0] * site[1])
+    return dict(mode=mode, n_pods=n_pods, need_pods=need, cross_width_m=round(cross, 1), it_mw=round(mw, 3), pod_mw=POD_MW, n_blocks=len(blocks), blocks=blocks, pods=pods,
                 site_m=[round(site[0], 1), round(site[1], 1)], area_ha=round(site[0] * site[1] / 1e4, 2),
                 pitch=dict(x=PITCH_X, y=PITCH_Y), requested=requested, warnings=warnings)
 

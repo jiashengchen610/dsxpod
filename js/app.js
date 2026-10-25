@@ -1,7 +1,7 @@
 // DSX POD 場址模擬（MVP）：六選一氣候帶 → 電量或基地 → 散熱與供水 → 看能耗 → 匯出 USD 與參數。
 // 結果用預算結果表（dsxpod/precompute.py）在 log(MW) 上內插；匯出呼叫本機或部署的 /api/export。
 import { plan } from './sizing.js';
-import { PodScene } from './scene.js';
+import { PodScene, ENV } from './scene.js';
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -9,6 +9,9 @@ const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '–' : Number(v).toLoc
 const COOL = { dry_only: '純乾冷卻器', dry_plus_chiller: '乾冷卻器＋冰水機', evaporative: '蒸發式' };
 const SUP = { t45: '45 °C', t32: '32 °C' };
 const SITE_ORDER = ['taoyuan', 'johor', 'phoenix', 'dallas', 'dublin', 'oslo'];
+// 算力：NVIDIA Vera Rubin NVL72 公開規格（每櫃 72 GPU；NVFP4 推論 3.6 EF〔effective〕、訓練 2.5 EF；2026 年資料，正式規格可能再變）。
+// 注意：能耗模型的每櫃功率仍用 GB300 代理（136 kW），Vera Rubin 每櫃約 190–230 kW；算力與功率來自不同代，正式數字公開後一起換。
+const RUBIN = { gpus: 72, pf_inf: 3600, pf_train: 2500 };
 
 const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('dsxpod:' + k, JSON.stringify(v)); } catch {} } };
@@ -18,7 +21,7 @@ const Q = new URLSearchParams(location.search);
 for (const k of ['site', 'cooling', 'supply']) if (Q.get(k)) state[k] = Q.get(k);
 if (Q.get('mw')) { state.sizeMode = 'mw'; state.mw = +Q.get('mw'); }
 if (Q.get('site_l') && Q.get('site_w')) { state.sizeMode = 'site'; state.siteL = +Q.get('site_l'); state.siteW = +Q.get('site_w'); }
-let CLIM, GRID, scene, layout, lastPods = -1, apiOK = false;
+let CLIM, GRID, scene, layout, lastPods = -1, lastSite = null, apiOK = false;
 const charts = {};
 
 // ---------------------------------------------------------------- 資料
@@ -92,8 +95,10 @@ function segUI(id, key) { $$(`#${id} button`).forEach(b => { b.classList.toggle(
 // ---------------------------------------------------------------- 結果
 function kpis(m) {
   const pueCls = m.valid ? 'ok' : 'bad';
+  const racks = layout.n_pods * 7, pfI = racks * RUBIN.pf_inf, pfT = racks * RUBIN.pf_train;
   $('#kpis').innerHTML = [
-    [`${fmt(m.pue_mean, 3)}<span class="badge ${m.valid ? 'good' : 'bad'}">${m.valid ? '可採信' : '不可採信'}</span>`, 'PUE（20 年平均）', pueCls],
+    [`${fmt(pfI)}<small> PFLOPS</small>`, `算力（NVFP4 推論，${fmt(pfI / 1000, 1)} EF）・訓練 ${fmt(pfT)} PFLOPS・${fmt(racks * RUBIN.gpus)} 顆 Vera Rubin GPU`, 'ok wide'],
+    [`${fmt(m.pue_mean, 3)}<span class="badge ${m.valid ? 'good' : 'bad'}" title="${m.valid ? '全年每小時都排得掉熱，PUE 代表真實滿載運轉' : '有些小時排不掉熱：那些小時機櫃必須降載，PUE 沒反映這個代價'}">${m.valid ? '全年可滿載' : '⚠ 有排熱缺口'}</span>`, 'PUE（20 年平均）', pueCls],
     [`${fmt(m.unmet_h)}<small> h</small>`, '每年排不掉熱的小時（最壞 ' + fmt(m.unmet_h_max) + ' h）', m.valid ? 'ok' : 'bad'],
     [`${fmt(m.facility_mwh / 1000, 1)}<small> GWh</small>`, '設施耗電／年（不含 IT）', 'ok'],
     [`${fmt(m.chiller_mwh)}<small> MWh</small>`, '冰水機耗電／年', 'ok'],
@@ -101,7 +106,9 @@ function kpis(m) {
     [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, `進風溫升（再循環 ${fmt(m.recirc_k, 1)}＋熱島 ${fmt(m.island_k, 1)}，風 3 m/s）`, 'ok'],
   ].map(([v, l, c]) => `<div class="kpi ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
   const notes = [`${layout.n_pods} 個 DSX POD（${fmt(layout.n_pods * 7)} 櫃）、IT 銘牌 ${fmt(layout.it_mw, 1)} MW、基地 ${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m（${fmt(layout.area_ha, 2)} ha）${layout.n_blocks > 1 ? `、${layout.n_blocks} 個區塊` : ''}`,
-    '機櫃以 GB300 規格代理 Vera Rubin NVL72；結果為篩選等級（逐時穩態模型＋經驗再循環與熱島）。'];
+    '算力用 Vera Rubin NVL72 公開規格（每櫃 NVFP4 推論 3,600 PFLOPS，為 effective 值；訓練 2,500 PFLOPS）；能耗用 GB300 每櫃 136 kW 代理（Vera Rubin 約 190–230 kW），兩者正式數字出來再一起換。',
+    '結果為篩選等級（逐時穩態模型＋經驗再循環與熱島）。'];
+  if (!m.valid) notes.unshift(`<b class="warn">⚠ 這個 PUE 不能單獨看</b>：每年約 ${fmt(m.unmet_h)} 小時（最壞年 ${fmt(m.unmet_h_max)} h）外氣太熱，乾冷卻器無法把水冷到 ${SUP[state.supply]} 供水溫度。模型在那些小時仍照算耗電，但實際上機櫃得降載或停機，所以 PUE 偏樂觀。要全年滿載，改用「乾冷卻器＋冰水機」或「蒸發式」（比較分頁有三者對照）。`);
   $('#sumNotes').innerHTML = '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>';
 }
 
@@ -144,7 +151,7 @@ function climCharts() {
     options: chartOpts({ scales: { y: { title: { display: true, text: '降水 mm／月' } }, x: { grid: { display: false } } } }) });
   const e = c.extremes, h = c.hours_per_year;
   $('#climFacts').innerHTML = [['柯本', `${c.koppen} ${c.koppen_name}`], ['ASHRAE 169', c.ashrae], ['年降水', `${fmt(c.map_mm)} mm`], ['平均 RH', `${e.rh_mean}%`],
-    ['99.6% 設計高溫', `${e.t_p99_6} °C`], ['濕球最高', `${e.twb_max} °C`], ['> 35 °C', `${fmt(h.above_35)} h／年`], ['純乾冷極限（45 °C 供水）', `${fmt(c.dry_cooler_limit_hours.t45)} h／年`]]
+    ['99.6% 設計高溫', `${e.t_p99_6} °C`], ['濕球最高', `${e.twb_max} °C`], ['> 35 °C', `${fmt(h.above_35)} h／年`], ['純乾冷極限（45 °C 供水）', `${fmt(c.dry_cooler_limit_hours.t45)} h／年`], ['3D 地景', (ENV[state.site] || {}).label || '–']]
     .map(([k, v]) => `<div><span>${k}</span><br>${v}</div>`).join('');
 }
 
@@ -153,9 +160,11 @@ function update() {
   store.set('state', state);
   layout = state.sizeMode === 'mw' ? plan({ mw: state.mw }) : plan({ siteL: state.siteL, siteW: state.siteW });
   const key = `${layout.mode}:${layout.n_pods}:${layout.site_m}`;
-  if (key !== lastPods) { scene.setLayout(layout); scene.frame(); lastPods = key; }
+  const siteChanged = state.site !== lastSite, layoutChanged = key !== lastPods;
+  if (siteChanged) { scene.setEnvironment(state.site, CLIM[state.site].lat, !layoutChanged); lastSite = state.site; }   // 換氣候帶 → 換天空、地面、植被
+  if (layoutChanged) { scene.setLayout(layout); scene.frame(); lastPods = key; }
   $('#sizeFacts').innerHTML = [['DSX POD', `${fmt(layout.n_pods)} 個（${fmt(layout.n_pods * 7)} 櫃）`], ['IT 銘牌', `${fmt(layout.it_mw, 1)} MW`], ['基地', `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
-    ['面積', `${fmt(layout.area_ha, 2)} ha`], ['區塊', layout.n_blocks > 1 ? `${layout.n_blocks} 個（每塊 ≤ 50 MW）` : '單一陣列']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    ['面積', `${fmt(layout.area_ha, 2)} ha`], ['區塊', layout.n_blocks > 1 ? `${layout.n_blocks} 個（每塊 4 × 14 = 56 POD ≈ 53 MW，各一座變電站）` : '單一陣列']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   $('#sizeWarn').textContent = layout.warnings.join('；');
   const all = {}; for (const c of Object.keys(COOL)) all[c] = interp(state.site, c, state.supply, layout.it_mw);
   const m = all[state.cooling]; if (!m) return;
@@ -177,7 +186,8 @@ addEventListener('pointermove', e => {
   clearTimeout(tipTimer); tipTimer = setTimeout(() => {
     const p = scene.pick(e.clientX, e.clientY); const tip = $('#tip');
     if (!p) { tip.hidden = true; return; }
-    tip.innerHTML = `<b>POD ${p.index + 1}</b>${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}<br>7 櫃（GB300 代理）・液冷 + 疊放乾冷卻器模組<br>位置 (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) m`;
+    if (p.kind === 'sub') tip.innerHTML = `<b>變電站${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}</b><br>中壓進線 → 主變壓器 ×2 → 開關室 → 區塊 ${fmt(p.n_pods)} 個 POD<br>IT 銘牌約 ${fmt(p.mw, 1)} MW（示意，未進能耗模型）`;
+    else tip.innerHTML = `<b>POD ${p.index + 1}</b>${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}<br>7 櫃（GB300 代理）・液冷 + 疊放乾冷卻器模組<br>位置 (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) m`;
     tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 280) + 'px'; tip.style.top = Math.min(e.clientY + 14, innerHeight - 90) + 'px';
   }, 40);
 });
