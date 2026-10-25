@@ -124,3 +124,12 @@ body.mobile .kpi .v{font-size:19px}
 body.mobile .tip{max-width:min(260px,80vw)}
 
 @media (max-width:380px){.kstrip b{font-size:14px}.kstrip{gap:6px}body.mobile .brand-title{font-size:13px}}
+
+/* 產品切換（nav 分頁下方） */
+.product-bar{display:flex;align-items:center;gap:8px;padding:8px 14px 0;font-size:12.5px;color:var(--muted);flex:none;flex-wrap:wrap}
+.product-bar .seg{margin:0}
+.product-bar .seg.mini button{text-align:center;white-space:nowrap;padding:5px 10px}
+.sku{background:#0006;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 8px;font:inherit;font-size:12.5px;max-width:100%}
+.gadu-only{display:none}
+body.gadu .gadu-only{display:block}
+body.gadu [data-pane="cool"] > :not(.gadu-only){display:none}

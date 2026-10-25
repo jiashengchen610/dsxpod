@@ -34,6 +34,12 @@
     <button class="tab" data-tab="unit" role="tab" data-i18n="nav.unit">④ 單元</button>
     <button class="collapse" id="navCollapse" title="縮小設定面板" aria-label="縮小設定面板" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse">‹</button>
   </div>
+  <!-- 產品：整個場址切換（NVIDIA DSX POD / GIGABYTE GADU）；GADU 再選機櫃型號（SKU） -->
+  <div class="product-bar">
+    <span class="lbl" data-i18n="product.label">產品</span>
+    <div class="seg mini" id="productSeg"><button data-p="dsx_pod" class="on">NVIDIA DSX POD</button><button data-p="gadu">GIGABYTE GADU</button></div>
+    <select id="skuSel" class="sku" hidden aria-label="GADU SKU"></select>
+  </div>
   <section class="tabpane active" data-pane="site">
     <p class="hint" data-i18n="site.hint">選一個氣候帶。卡片顯示逐月日最高 / 日最低氣溫帶與柯本分類。</p>
     <div class="sites" id="siteCards"></div>
@@ -58,6 +64,7 @@
     <div class="warn" id="sizeWarn"></div>
   </section>
   <section class="tabpane" data-pane="cool">
+    <div class="reco gadu-only" id="gaduCoolNote" data-i18n="gadu.cool.note">GADU 的散熱是固定配置：列間 CDU／列間冷卻器＋氣冷冰水機，冰水溫度由機櫃型號決定（液冷 25 °C、氣冷 15 °C）。</div>
     <label class="field" data-i18n="cool.preset">建議設定</label>
     <div class="seg col preset" id="presetSeg">
       <button data-p="energy"><span data-i18n="cool.energy">⚡ 最省電</span><small id="pEnergy">—</small></button>

@@ -2,14 +2,23 @@
 // 結果用預算結果表（dsxpod/precompute.py）在 log(MW) 上內插；匯出呼叫本機或部署的 /api/export。
 import { plan } from './sizing.js';
 import { PodScene, ENV } from './scene.js';
+import { PRODUCTS, defaultSku, spec as prodSpec } from './products.js';   // 產品 / SKU 唯一來源（dsxpod/products.py 產生）
 import { t, lang, locale, setLang, applyStatic, siteName, koppenName, landName, warnText } from './i18n.js';
 applyStatic();                                                  // 靜態文字先套語言（載入畫面也要）
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '–' : Number(v).toLocaleString(locale(), { minimumFractionDigits: d, maximumFractionDigits: d });
-const COOL = { dry_only: 'cool.name.dry_only', dry_plus_chiller: 'cool.name.dry_plus_chiller', evaporative: 'cool.name.evaporative' };   // 顯示用 t(COOL[c])
-const SUP = { t45: '45 °C', t32: '32 °C' };
+const COOL = { dry_only: 'cool.name.dry_only', dry_plus_chiller: 'cool.name.dry_plus_chiller', evaporative: 'cool.name.evaporative', chilled_water: 'cool.name.chilled_water' };   // 顯示用 t(COOL[c])
+const SUP = { t45: '45 °C', t32: '32 °C', t28: 'CHW 25 °C' };
+// 每種產品可用的旋鈕（與 dsxpod/variants.COOLING_BY_PRODUCT / SUPPLY_BY_PRODUCT 一致）
+const PCOOL = { dsx_pod: ['dry_only', 'dry_plus_chiller', 'evaporative'], gadu: ['chilled_water'] };
+const PSUP = { dsx_pod: ['t45', 't32'], gadu: ['t28'] };
+const coolKeys = () => PCOOL[state.product], supKeys = () => PSUP[state.product];
+const skuKey = () => state.sku || defaultSku(state.product);
+const PR = () => PRODUCTS[state.product], SK = () => prodSpec(state.product, state.sku)[1];
+const isGadu = () => state.product === 'gadu';
+const supLabel = s => s === 't28' ? `CHW ${SK().chws_c} °C` : SUP[s];      // GADU 的供水標籤依 SKU 的冰水溫度
 const SITE_ORDER = ['taoyuan', 'johor', 'phoenix', 'dallas', 'dublin', 'oslo'];
 // 算力：NVIDIA Vera Rubin NVL72 公開規格（每櫃 72 GPU；NVFP4 推論 3.6 EF〔effective〕、訓練 2.5 EF；2026 年資料，正式規格可能再變）。
 // 注意：能耗模型的每櫃功率仍用 GB300 代理（136 kW），Vera Rubin 每櫃約 190–230 kW；算力與功率來自不同代，正式數字公開後一起換。
@@ -17,7 +26,9 @@ const RUBIN = { gpus: 72, pf_inf: 3600, pf_train: 2500 };
 
 const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('dsxpod:' + k, JSON.stringify(v)); } catch {} } };
-const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', preset: null }, store.get('state', {}));
+const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', preset: null, product: 'dsx_pod', sku: null }, store.get('state', {}));
+if (!PRODUCTS[state.product]) state.product = 'dsx_pod';
+if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
 // 手機 / 窄螢幕：設定進漢堡選單、報告進底部面板
 const MQ = matchMedia('(max-width: 900px)');
 const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open');
@@ -33,15 +44,18 @@ function initialQuality() {
 const QUALITY = initialQuality();
 // 網址參數可覆寫（分享 / 測試用）：?site=phoenix&mw=200&cooling=evaporative&supply=t32&tab=cmp&nav=cool
 const Q = new URLSearchParams(location.search);
-for (const k of ['site', 'cooling', 'supply']) if (Q.get(k)) state[k] = Q.get(k);
+for (const k of ['site', 'cooling', 'supply', 'product', 'sku']) if (Q.get(k)) state[k] = Q.get(k);
+if (!PRODUCTS[state.product]) state.product = 'dsx_pod'; if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
 if (Q.get('mw')) { state.sizeMode = 'mw'; state.mw = +Q.get('mw'); }
 if (Q.get('site_l') && Q.get('site_w')) { state.sizeMode = 'site'; state.siteL = +Q.get('site_l'); state.siteW = +Q.get('site_w'); }
-let CLIM, GRID, scene, layout, lastPods = -1, lastSite = null, apiOK = false;
+const GRIDS = {};
+let CLIM, GRID, scene, layout, lastPods = -1, lastSite = null, lastProd = null, apiOK = false;
 const charts = {};
 
 // ---------------------------------------------------------------- 資料
 function interp(site, cooling, supply, itMW) {
-  const rows = GRID.rows.filter(r => r.site === site && r.cooling === cooling && r.supply === supply).sort((a, b) => a.it_mw - b.it_mw);
+  const G = GRIDS[state.product]; if (!G) return null;
+  const rows = G.rows.filter(r => (r.product || 'dsx_pod') === state.product && (!isGadu() || r.sku === skuKey()) && r.site === site && r.cooling === cooling && r.supply === supply).sort((a, b) => a.it_mw - b.it_mw);
   if (!rows.length) return null;
   const x = Math.log(Math.min(Math.max(itMW, rows[0].it_mw), rows[rows.length - 1].it_mw));
   let a = rows[0], b = rows[0];
@@ -60,7 +74,7 @@ function interp(site, cooling, supply, itMW) {
 }
 
 function recommend(site, supply, itMW) {
-  const r = Object.keys(COOL).map(c => ({ c, m: interp(site, c, supply, itMW) })).filter(x => x.m);
+  const r = coolKeys().map(c => ({ c, m: interp(site, c, supply, itMW) })).filter(x => x.m);
   const ok = r.filter(x => x.m.valid).sort((a, b) => a.m.pue_mean - b.m.pue_mean);
   if (ok.length) {
     const best = ok[0], dry = ok.find(x => x.c !== 'evaporative');
@@ -112,7 +126,7 @@ function segUI(id, key) { $$(`#${id} button`).forEach(b => { b.classList.toggle(
 // 沒有任何組合排得掉熱時，退而求其次挑排不掉熱小時最少的，並標示。
 function optimize(goal, itMW) {
   const c = [];
-  for (const k of Object.keys(COOL)) for (const sp of Object.keys(SUP)) { const m = interp(state.site, k, sp, itMW); if (m) c.push({ c: k, s: sp, m }); }
+  for (const k of coolKeys()) for (const sp of supKeys()) { const m = interp(state.site, k, sp, itMW); if (m) c.push({ c: k, s: sp, m }); }
   const ok = c.filter(x => x.m.valid);
   if (!ok.length) { const b = c.sort((a, b) => a.m.unmet_h - b.m.unmet_h)[0]; return { ...b, feasible: false }; }
   if (goal === 'water') return { ...ok.sort((a, b) => a.m.water_m3 - b.m.water_m3 || a.m.facility_mwh - b.m.facility_mwh)[0], feasible: true };
@@ -122,7 +136,7 @@ function optimize(goal, itMW) {
   return { ...near[0], feasible: true };
 }
 function presetUI(itMW) {
-  const lab = o => t('preset.lab', { cool: t(COOL[o.c]), sup: SUP[o.s], gwh: fmt(o.m.facility_mwh / 1000, 1), water: fmt(o.m.water_m3) }) + (o.feasible ? '' : t('preset.gap'));
+  const lab = o => t('preset.lab', { cool: t(COOL[o.c]), sup: supLabel(o.s), gwh: fmt(o.m.facility_mwh / 1000, 1), water: fmt(o.m.water_m3) }) + (o.feasible ? '' : t('preset.gap'));
   const best = { energy: optimize('energy', itMW), water: optimize('water', itMW) };
   $('#pEnergy').innerHTML = lab(best.energy); $('#pWater').innerHTML = lab(best.water);
   $$('#presetSeg button').forEach(b => { b.classList.toggle('on', b.dataset.p === state.preset); b.onclick = () => { state.preset = b.dataset.p; update(); }; });
@@ -131,7 +145,7 @@ function presetUI(itMW) {
 
 // ---------------------------------------------------------------- 結果
 function kpiStrip(m) {
-  const racks = layout.n_pods * 7, ef = racks * RUBIN.pf_inf / 1000;
+  const sk = SK(), ef = layout.n_pods * sk.pf_inf_total / 1000;
   const gwh = m.facility_mwh / 1000;
   $('#dataTagKpi').textContent = `PUE ${fmt(m.pue_mean, 3)}${m.valid ? '' : ' ⚠'}`;
   $('#kpiStrip').innerHTML = [
@@ -144,21 +158,21 @@ function kpiStrip(m) {
 
 function kpis(m) {
   kpiStrip(m);
-  const racks = layout.n_pods * 7, pfI = racks * RUBIN.pf_inf, pfT = racks * RUBIN.pf_train;
+  const sk = SK(), racks = layout.n_pods * sk.racks_total, gpus = layout.n_pods * sk.gpus, pfI = layout.n_pods * sk.pf_inf_total, pfT = sk.pf_inf_per_gpu === 50 ? Math.round(pfI * RUBIN.pf_train / RUBIN.pf_inf) : null;
   const h = fmt(m.unmet_h), hmax = fmt(m.unmet_h_max);
   const badge = `<span class="badge ${m.valid ? 'good' : 'bad'}" title="${m.valid ? t('kpi.ok.t') : t('kpi.gap.t', { h, hmax })}">${m.valid ? t('kpi.ok') : t('kpi.gap', { h })}</span>`;
   $('#kpis').innerHTML = [
-    [`${fmt(pfI)}<small> PFLOPS</small>`, t('kpi.compute', { gpus: fmt(racks * RUBIN.gpus) }), 'ok wide', t('kpi.compute.t', { pfT: fmt(pfT) })],
+    [`${fmt(pfI)}<small> PFLOPS</small>`, isGadu() ? t('kpi.compute.g', { gpus: fmt(gpus), model: sk.name }) : t('kpi.compute', { gpus: fmt(gpus) }), 'ok wide', pfT ? t('kpi.compute.t', { pfT: fmt(pfT) }) : ''],
     [`${fmt(m.pue_mean, 3)}${badge}`, t('kpi.pue'), m.valid ? 'ok' : 'bad', ''],
     [`${fmt(m.facility_mwh / 1000, 1)}<small> GWh</small>`, t('kpi.energy'), 'ok', ''],
     [`${fmt(m.water_m3)}<small> m³</small>`, t('kpi.water'), 'ok', ''],
     [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, t('kpi.rise'), 'ok', t('kpi.rise.t', { r: fmt(m.recirc_k, 1), i: fmt(m.island_k, 1) })],
   ].map(([v, l, c, tt]) => `<div class="kpi ${c}" title="${tt}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
-  const notes = [t('note.layout', { pods: fmt(layout.n_pods), racks: fmt(racks), mw: fmt(layout.it_mw, 1), l: fmt(layout.site_m[0]), w: fmt(layout.site_m[1]), ha: fmt(layout.area_ha, 2),
+  const notes = [t(isGadu() ? 'note.layout.gadu' : 'note.layout', { pods: fmt(layout.n_pods), model: sk.name, racks: fmt(racks), mw: fmt(layout.it_mw, 1), l: fmt(layout.site_m[0]), w: fmt(layout.site_m[1]), ha: fmt(layout.area_ha, 2),
     blocks: layout.n_blocks > 1 ? t('note.blocks', { n: layout.n_blocks }) : '' })];
-  if (!m.valid) notes.unshift(t('note.warn', { h, hmax, sup: SUP[state.supply] }));
+  if (!m.valid) notes.unshift(t(isGadu() ? 'note.warn.gadu' : 'note.warn', { h, hmax, sup: supLabel(state.supply) }));
   $('#sumNotes').innerHTML = '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>' +
-    `<details><summary>${t('note.more')}</summary><ul><li>${t('note.rubin')}</li><li>${t('note.screen')}</li></ul></details>`;
+    `<details><summary>${t('note.more')}</summary><ul><li>${t(isGadu() ? 'note.gadu' : 'note.rubin')}</li><li>${t('note.screen')}</li></ul></details>`;
 }
 
 function chartOpts(extra) {
@@ -170,7 +184,7 @@ function make(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new 
 function yearChart(all) {
   const ys = Object.keys(all[state.cooling].years).sort();
   const col = { dry_only: css('--s1'), dry_plus_chiller: css('--s2'), evaporative: css('--s3') };
-  make('yearChart', { type: 'line', data: { labels: ys, datasets: Object.keys(COOL).filter(c => all[c]).map(c => ({ label: t(COOL[c]), data: ys.map(y => all[c].years[y]),
+  make('yearChart', { type: 'line', data: { labels: ys, datasets: coolKeys().filter(c => all[c]).map(c => ({ label: t(COOL[c]), data: ys.map(y => all[c].years[y]),
       borderColor: col[c], backgroundColor: col[c], borderWidth: c === state.cooling ? 2.5 : 1.2, pointRadius: c === state.cooling ? 2.5 : 0, tension: .25 })) },
     options: chartOpts({ plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 10, boxHeight: 10 } } }, scales: { y: { title: { display: true, text: 'PUE' } }, x: { grid: { display: false } } } }) });
 }
@@ -184,7 +198,7 @@ function mixChart(m) {
 
 function cmpTable(all, reco) {
   $('#cmpTable').innerHTML = `<table><thead><tr><th>${t('cmp.strategy')}</th><th>PUE</th><th>${t('cmp.unmet')}</th><th>${t('cmp.chiller')}</th><th>${t('cmp.water')}</th></tr></thead><tbody>` +
-    Object.keys(COOL).filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === reco.c ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table><p class="hint">' + t('cmp.reco') + reco.why + '</p>';
+    coolKeys().filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === reco.c ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table><p class="hint">' + t('cmp.reco') + reco.why + '</p>';
 }
 
 function climCharts() {
@@ -203,10 +217,43 @@ function climCharts() {
     .map(([k, v]) => `<div><span>${k}</span><br>${v}</div>`).join('');
 }
 
+// ---------------------------------------------------------------- 產品切換（整個場址：DSX POD ↔ GADU；GADU 再選 SKU）
+async function ensureGrid(p) {
+  if (GRIDS[p]) return;
+  try { GRIDS[p] = await fetchJSON(p === 'gadu' ? 'data/results_grid_gadu.json' : 'data/results_grid.json', 'grid'); } catch { GRIDS[p] = { rows: [] }; }
+}
+const swapI18n = (sel, key) => { const el = $(sel); if (el) { el.dataset.i18n = key; el.innerHTML = t(key); } };
+function productUI() {
+  const g = isGadu();
+  $$('#productSeg button').forEach(b => { b.classList.toggle('on', b.dataset.p === state.product); b.onclick = () => setProduct(b.dataset.p, null); });
+  const sel = $('#skuSel'); sel.hidden = !g;
+  sel.innerHTML = Object.entries(PR().skus).map(([k, s]) => `<option value="${k}"${k === skuKey() ? ' selected' : ''}>${s.name} · ${s.it_mw} MW</option>`).join('');
+  sel.onchange = () => setProduct(state.product, sel.value);
+  document.body.classList.toggle('gadu', g);
+  swapI18n('[data-pane="unit"] > p.hint', g ? 'unit.hint.gadu' : 'unit.hint'); swapI18n('[data-pane="unit"] > p.hint:last-of-type', g ? 'unit.official.gadu' : 'unit.official');
+  swapI18n('#unitSeg [data-view="unit"] small', g ? 'unit.inside.s.gadu' : 'unit.inside.s');
+  swapI18n('#unitSeg [data-view="cool"] span', g ? 'unit.cool.gadu' : 'unit.cool'); swapI18n('#unitSeg [data-view="cool"] small', g ? 'unit.cool.gadu.s' : 'unit.cool.s');
+  swapI18n('#unitSeg [data-view="skid"] span', g ? 'unit.skidview.gadu' : 'unit.skidview'); swapI18n('#unitSeg [data-view="skid"] small', g ? 'unit.skidview.gadu.s' : 'unit.skidview.s');
+}
+async function setProduct(p, sku) {
+  state.product = p; state.sku = sku; state.preset = null;
+  if (!coolKeys().includes(state.cooling)) state.cooling = coolKeys()[0];
+  if (!supKeys().includes(state.supply)) state.supply = supKeys()[0];
+  await ensureGrid(p);
+  productUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); unitFacts(); update();
+}
+
 // ---------------------------------------------------------------- 單元（一個 POD 的組成）
 const curView = () => $('#nav .tab.active')?.dataset.tab || 'site';
 function unitFacts() {
-  const racks = 7;
+  const racks = 7, sk = SK();
+  if (isGadu()) {
+    $('#unitFacts').innerHTML = [[t('unit.racks'), t('unit.g.racks.v', { c: sk.racks_compute, model: sk.name, n: sk.racks_network, u: sk.rack_u, gpus: fmt(sk.gpus) })],
+      [t('unit.compute'), t('unit.g.compute.v', { pf: fmt(sk.pf_inf_total) })], [t('unit.it'), t('unit.g.it.v', { mw: sk.it_mw })],
+      [t('unit.g.cool'), t('unit.g.cool.v', { cdu: sk.cdus, irc: sk.inrow_coolers, ch: sk.chillers, chw: sk.chws_c })],
+      [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.g.power.v')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    return;
+  }
   $('#unitFacts').innerHTML = [[t('unit.racks'), t('unit.racks.v', { n: racks, gpus: racks * RUBIN.gpus })], [t('unit.compute'), t('unit.compute.v', { pf: fmt(racks * RUBIN.pf_inf) })],
     [t('unit.it'), t('unit.it.v', { mw: fmt(racks * 136 / 1000, 3) })], [t('unit.cdu'), t('unit.cdu.v')], [t('unit.mod'), t('unit.mod.v')],
     [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.skid.v')], [t('unit.weight'), '28,500 kg']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
@@ -215,21 +262,23 @@ function unitFacts() {
 // ---------------------------------------------------------------- 主更新
 function update() {
   store.set('state', state);
-  layout = state.sizeMode === 'mw' ? plan({ mw: state.mw }) : plan({ siteL: state.siteL, siteW: state.siteW });
-  const key = `${layout.mode}:${layout.n_pods}:${layout.site_m}`;
+  const prodKey = `${state.product}:${skuKey()}`;
+  if (prodKey !== lastProd) { scene.setProduct(PR(), SK()); lastProd = prodKey; lastPods = -1; }
+  layout = state.sizeMode === 'mw' ? plan({ mw: state.mw, product: state.product, sku: state.sku }) : plan({ siteL: state.siteL, siteW: state.siteW, product: state.product, sku: state.sku });
+  const key = `${prodKey}:${layout.mode}:${layout.n_pods}:${layout.site_m}`;
   const siteChanged = state.site !== lastSite, layoutChanged = key !== lastPods;
   if (siteChanged) { scene.setEnvironment(state.site, CLIM[state.site].lat, !layoutChanged); lastSite = state.site; }   // 換氣候帶 → 換天空、地面、植被
   if (layoutChanged) { const first = lastPods === -1; scene.setLayout(layout); scene.setView(curView(), { animate: !first, duration: 700 }); lastPods = key; }
-  $('#sizeFacts').innerHTML = [[t('size.pods'), t('size.pods.v', { n: fmt(layout.n_pods), racks: fmt(layout.n_pods * 7) })], [t('size.it'), `${fmt(layout.it_mw, 1)} MW`], [t('size.base'), `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
+  $('#sizeFacts').innerHTML = [[t(isGadu() ? 'size.units' : 'size.pods'), t('size.pods.v', { n: fmt(layout.n_pods), racks: fmt(layout.n_pods * SK().racks_total) })], [t('size.it'), `${fmt(layout.it_mw, 1)} MW`], [t('size.base'), `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
     [t('size.area'), `${fmt(layout.area_ha, 2)} ha`], [t('size.blocks'), layout.n_blocks > 1 ? t('size.blocks.v', { n: layout.n_blocks }) : t('size.single')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   $('#sizeWarn').textContent = layout.warnings.map(warnText).join(lang === 'en' ? '; ' : '；');
   const best = presetUI(layout.it_mw);
   if (state.preset && best[state.preset]) { state.cooling = best[state.preset].c; state.supply = best[state.preset].s; segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); store.set('state', state); }
-  const all = {}; for (const c of Object.keys(COOL)) all[c] = interp(state.site, c, state.supply, layout.it_mw);
-  const m = all[state.cooling]; if (!m) return;
+  const all = {}; for (const c of coolKeys()) all[c] = interp(state.site, c, state.supply, layout.it_mw);
+  const m = all[state.cooling]; if (!m) { $('#sumNotes').innerHTML = `<p class="warn">${t('grid.missing')}</p>`; $('#kpis').innerHTML = ''; $('#kpiStrip').innerHTML = ''; return; }
   const reco = recommend(state.site, state.supply, layout.it_mw);
   const site = CLIM[state.site];
-  $('#summaryChip').textContent = `${siteName(state.site, site)} (${site.koppen})・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${t(COOL[state.cooling])}・${SUP[state.supply]}・PUE ${fmt(m.pue_mean, 3)}`;
+  $('#summaryChip').textContent = `${PR().short}${isGadu() ? ' ' + SK().name : ''}・${siteName(state.site, site)} (${site.koppen})・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${t(COOL[state.cooling])}・${supLabel(state.supply)}・PUE ${fmt(m.pue_mean, 3)}`;
   kpis(m); yearChart(all); mixChart(m); cmpTable(all, reco); climCharts();
 }
 
@@ -269,8 +318,10 @@ function showTip(x, y) {
   const p = scene.pick(x, y); const tip = $('#tip');
   if (!p) { tip.hidden = true; return; }
   if (p.kind === 'part') tip.innerHTML = `<b>${p.key ? t(p.key, p.p) : p.name}</b><br>${p.key ? t(p.key + '.d', p.p) : p.detail}`;
-  else if (p.kind === 'skid') tip.innerHTML = `<b>${t('tip.skid', { i: p.index + 1 })}</b><br>${t('tip.skid.d', { kva: fmt(Math.ceil(7 * 136 * 1.25 / 100) * 100) })}`;
+  else if (p.kind === 'skid') { const kva = fmt(Math.ceil(SK().it_mw * 1000 * 1.25 / 100) * 100); tip.innerHTML = isGadu() ? `<b>${t('tip.skid.gadu', { i: p.index + 1 })}</b><br>${t('tip.skid.gadu.d', { kva })}` : `<b>${t('tip.skid', { i: p.index + 1 })}</b><br>${t('tip.skid.d', { kva })}`; }
+  else if (p.kind === 'chiller') tip.innerHTML = `<b>${t('tip.chiller', { i: p.index + 1 })}</b><br>${t('tip.chiller.d', { chw: SK().chws_c, n: SK().chillers })}`;
   else if (p.kind === 'sub') tip.innerHTML = `<b>${t('tip.sub')}${layout.n_blocks > 1 ? t('tip.block', { b: p.block + 1 }) : ''}</b><br>${t('tip.sub.d', { n: fmt(p.n_pods), mw: fmt(p.mw, 1) })}`;
+  else if (isGadu()) tip.innerHTML = `<b>${t('tip.pod.gadu', { i: p.index + 1 })}</b>${layout.n_blocks > 1 ? t('tip.block', { b: p.block + 1 }) : ''}<br>${t('tip.pod.gadu.d', { model: SK().name, racks: SK().racks_total, x: fmt(p.x, 1), y: fmt(p.y, 1) })}`;
   else tip.innerHTML = `<b>${t('tip.pod', { i: p.index + 1 })}</b>${layout.n_blocks > 1 ? t('tip.block', { b: p.block + 1 }) : ''}<br>${t('tip.pod.d', { x: fmt(p.x, 1), y: fmt(p.y, 1) })}`;
   tip.hidden = false; tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - 270)) + 'px'; tip.style.top = Math.max(8, Math.min(y + 14, innerHeight - 100)) + 'px';
 }
@@ -294,7 +345,7 @@ function exportUI() {
 $('#exportBtn').onclick = async () => {
   const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = t('export.busy');
   try {
-    const body = { site: state.site, cooling: state.cooling, supply: state.supply, ...(state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
+    const body = { site: state.site, cooling: state.cooling, supply: state.supply, product: state.product, sku: skuKey(), ...(state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
     const r = await fetch('api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(await r.text());
     const blob = await r.blob(); const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'dsx_pod_export.zip';
@@ -307,10 +358,11 @@ $('#exportBtn').onclick = async () => {
 // ---------------------------------------------------------------- 啟動
 // ---------------------------------------------------------------- 載入進度
 // 權重：程式庫（app.js 能跑就代表已載完）、氣候摘要、結果表、兩個 GLB、建場景。CDN 可能壓縮傳輸 → 總量取 content-length 或預估值，進度一律夾在 0–1。
-const LOAD = { libs: [0.12, 1], climate: [0.03, 0], grid: [0.27, 0], 'container.glb': [0.13, 0], 'cooler_module.glb': [0.24, 0], 'power_skid.glb': [0.04, 0], build: [0.17, 0] };
-const EST = { climate: 15e3, grid: 461e3, 'container.glb': 224e3, 'cooler_module.glb': 503e3, 'power_skid.glb': 83e3 };
-const MSG = { climate: 'load.climate', grid: 'load.grid', 'container.glb': 'load.container', 'cooler_module.glb': 'load.cooler', 'power_skid.glb': 'load.skid', build: 'load.build' };
+const LOAD = { libs: [0.12, 1], climate: [0.03, 0], grid: [0.25, 0], 'container.glb': [0.12, 0], 'cooler_module.glb': [0.20, 0], 'power_skid.glb': [0.04, 0], 'chiller.glb': [0.07, 0], build: [0.17, 0] };
+const EST = { climate: 15e3, grid: 461e3, 'container.glb': 224e3, 'cooler_module.glb': 503e3, 'power_skid.glb': 104e3, 'chiller.glb': 258e3 };
+const MSG = { climate: 'load.climate', grid: 'load.grid', 'container.glb': 'load.container', 'cooler_module.glb': 'load.cooler', 'power_skid.glb': 'load.skid', 'chiller.glb': 'load.chiller', build: 'load.build' };
 function progress(key, frac) {
+  if (!LOAD[key]) return;                                      // 不在表上的檔案不算進度（這裡丟例外會卡住下載串流）
   LOAD[key][1] = Math.max(LOAD[key][1], Math.min(1, frac || 0));
   const tot = Object.values(LOAD).reduce((s, [w, f]) => s + w * f, 0);
   const bar = $('.ld-bar'); bar.classList.add('det'); $('#ldFill').style.width = `${(tot * 100).toFixed(1)}%`;
@@ -326,22 +378,24 @@ async function fetchJSON(url, key) {
   const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
   progress(key, 1); return JSON.parse(new TextDecoder().decode(buf));
 }
-const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // 讓進度條在同步重活之前先畫出來
+const paint = () => new Promise(r => { let done = false; const f = () => { if (!done) { done = true; setTimeout(r, 0); } }; requestAnimationFrame(f); setTimeout(f, 80); });   // 讓進度條先畫出來；分頁被節流（背景、iframe）時 rAF 不一定來，80 ms 後照走
 
 (async function main() {
   progress('libs', 1);
   [CLIM, GRID] = await Promise.all([fetchJSON('data/climate_summary.json', 'climate'), fetchJSON('data/results_grid.json', 'grid')]);
+  GRIDS.dsx_pod = GRID; if (isGadu()) await ensureGrid('gadu');
+  if (!coolKeys().includes(state.cooling)) state.cooling = coolKeys()[0]; if (!supKeys().includes(state.supply)) state.supply = supKeys()[0];
   scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto, labels: { site: (l, w, ha) => t('scene.site', { l, w, ha }), use: (l, w) => t('scene.use', { l, w }) } });
   await scene.load('assets/', (f, loaded, total) => progress(f, loaded / Math.max(total || EST[f], loaded * 1.05)));
-  progress('container.glb', 1); progress('cooler_module.glb', 1); progress('power_skid.glb', 1); progress('build', 0.15); await paint();
+  progress('container.glb', 1); progress('cooler_module.glb', 1); progress('power_skid.glb', 1); progress('chiller.glb', 1); progress('build', 0.15); await paint();
   const qualityUI = () => $$('#qualitySeg button').forEach(b => { b.classList.toggle('on', b.dataset.q === scene.quality); b.onclick = () => { store.set('quality', b.dataset.q); scene.setQuality(b.dataset.q); qualityUI(); }; });
   let toastTimer;   // 自動降畫質時在工具列短暫提示
   scene.onQualityChange = (q, why) => { qualityUI(); if (why && why.fps) { const el = $('#qualityHint'); el.textContent = t('quality.auto', why); el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 6000); } };
   qualityUI();
   // 語言切換：靜態文字重套，動態文字全部重畫（場址卡片、單元、結果、匯出說明、3D 基地標籤）
-  const langUI = () => $$('#langSeg button').forEach(b => { b.classList.toggle('on', b.dataset.lang === lang); b.onclick = () => { if (!setLang(b.dataset.lang)) return; langUI(); siteCards(); unitFacts(); setMin('nav', document.body.classList.contains('nav-min')); update(); exportUI(); scene.setLayout(layout); }; });
+  const langUI = () => $$('#langSeg button').forEach(b => { b.classList.toggle('on', b.dataset.lang === lang); b.onclick = () => { if (!setLang(b.dataset.lang)) return; langUI(); siteCards(); productUI(); unitFacts(); setMin('nav', document.body.classList.contains('nav-min')); update(); exportUI(); scene.setLayout(layout); }; });
   langUI();
-  tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply');
+  tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); productUI();
   // 分鏡：每個設定分頁一個鏡頭（場址 = 全景、規模 = 整個基地、散熱 = 散熱模組近景、單元 = 貨櫃剖面）
   $$('#nav .tab').forEach(t => t.addEventListener('click', () => { scene.setView(t.dataset.tab); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === 'unit')); }));
   $$('#unitSeg button').forEach(b => b.onclick = () => { $$('#unitSeg button').forEach(x => x.classList.toggle('on', x === b)); scene.setView(b.dataset.view); });

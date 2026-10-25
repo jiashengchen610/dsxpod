@@ -186,12 +186,51 @@ function panelTex() {
     g.fillStyle = '#d8382b'; g.fillRect(w - 30, 18, 14, 10);
   });
 }
-function buildInterior(quality) {
+let _netTex, _ircTex;
+function netFrontTex() {                                                          // 網路 / 管理櫃：交換器面板 + 少量藍 / 黃跳線
+  return _netTex ||= canvasTex(128, 512, (g, w, h) => {
+    const r = rng(29); g.fillStyle = '#17181b'; g.fillRect(0, 0, w, h);
+    for (let y = 20; y < h - 20; y += 14) { g.fillStyle = y % 42 === 20 ? '#2b2e34' : '#202329'; g.fillRect(8, y, w - 16, 10); }
+    for (let i = 0; i < 26; i++) { g.fillStyle = r() < 0.6 ? '#3987e5' : '#e2b53a'; g.globalAlpha = 0.8; const x = 14 + r() * (w - 28), y0 = 30 + r() * 200; g.fillRect(x, y0, 2, 60 + r() * 120); }
+    g.globalAlpha = 1; for (let y = 24; y < h - 20; y += 42) { g.fillStyle = '#76b900'; g.fillRect(10, y, 3, 3); g.fillRect(16, y, 3, 3); }
+  });
+}
+function ircFrontTex() {                                                          // 列間冷卻器：白色門板 + 水平格柵
+  return _ircTex ||= canvasTex(64, 512, (g, w, h) => {
+    g.fillStyle = '#e4e6e3'; g.fillRect(0, 0, w, h); g.fillStyle = '#9a9d9a';
+    for (let y = 30; y < h - 30; y += 9) g.fillRect(8, y, w - 16, 4);
+    g.fillStyle = '#3987e5'; g.fillRect(w / 2 - 3, 12, 6, 6);
+  });
+}
+function buildInterior(quality, product = null, sku = null) {
   const G = new THREE.Group(); const Std = quality === 'high' ? THREE.MeshStandardMaterial : THREE.MeshLambertMaterial;
   const mat = (o) => { o = { ...o }; if (quality !== 'high') { delete o.metalness; delete o.roughness; } return new Std(o); };
   const own = (mesh, info) => { mesh.userData.own = true; mesh.castShadow = mesh.receiveShadow = true; if (info) mesh.userData.info = info; return mesh; };
   const box = (w, h, d, x, y, z, m, info) => own(new THREE.Mesh(new THREE.BoxGeometry(w, h, d).translate(x + w / 2, y + h / 2, z - d / 2), m), info);
   const yRow = WALL_T + 0.02;                                                     // 一排靠南牆（USD y）→ three z = -y
+  if (product && product.cooling_mode === 'chilled_water' && sku && sku.row) {    // ---- GADU：CDU｜運算櫃夾列間冷卻器｜網路櫃｜CDU（products.py 的 row）
+    const body = mat({ color: 0x1a1b1e, roughness: 0.55, metalness: 0.5 }), front = mat({ map: rackFrontTex(), roughness: 0.6, metalness: 0.2 });
+    const nbody = mat({ color: 0x24262b, roughness: 0.55, metalness: 0.45 }), nfront = mat({ map: netFrontTex(), roughness: 0.6, metalness: 0.2 });
+    const cduBody = mat({ color: 0x1d1e21, roughness: 0.5, metalness: 0.4 }), cduFront = mat({ map: cduFrontTex(), roughness: 0.5 });
+    const ircBody = mat({ color: 0xdfe1de, roughness: 0.6, metalness: 0.15 }), ircFront = mat({ map: ircFrontTex(), roughness: 0.6 });
+    const six = (b, f) => [b, b, b, b, f, b];
+    let nr = 0, nn = 0, ni = 0, nc = 0;
+    const cool = sku.liquid ? 'DLC' : 'air';
+    for (const [kind, x, w] of sku.row) {
+      if (kind === 'rack') { nr++; G.add(own(new THREE.Mesh(new THREE.BoxGeometry(w, 2.3, 1.2).translate(x + w / 2, FLOOR_Z + 1.15, -(yRow + 0.6)), six(body, front)),
+        { key: 'part.rack.g', p: { i: nr, model: sku.name, kw: Math.round(sku.rack_kw), cool } })); }
+      else if (kind === 'net') { nn++; G.add(own(new THREE.Mesh(new THREE.BoxGeometry(w, 2.3, 1.2).translate(x + w / 2, FLOOR_Z + 1.15, -(yRow + 0.6)), six(nbody, nfront)), { key: 'part.net', p: { i: nn } })); }
+      else if (kind === 'irc') { ni++; G.add(own(new THREE.Mesh(new THREE.BoxGeometry(w, 2.0, 1.2).translate(x + w / 2, FLOOR_Z + 1.0, -(yRow + 0.6)), six(ircBody, ircFront)), { key: 'part.irc', p: { i: ni } })); }
+      else if (kind === 'cdu') { nc++; G.add(own(new THREE.Mesh(new THREE.BoxGeometry(w, 2.4, 1.2).translate(x + w / 2, FLOOR_Z + 1.2, -(yRow + 0.6)), six(cduBody, cduFront)), { key: 'part.cdu.g', p: { i: nc } })); }
+    }
+    const pipe = mat({ color: 0x6b6f75, roughness: 0.35, metalness: 0.8 }), hd = INTERIOR.headers;
+    const hg = new THREE.Group(); hg.userData.info = { key: 'part.header.g', p: {} };
+    hd.y.forEach(y => hg.add(own(new THREE.Mesh(new THREE.CylinderGeometry(hd.r, hd.r, L - 0.4, 16).rotateZ(Math.PI / 2).translate(L / 2, hd.z, -y), pipe))));
+    G.add(hg);
+    const glow = new THREE.MeshBasicMaterial({ color: 0xeef3ff });
+    for (let x = 1.2; x < L - 1; x += 2.4) G.add(own(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.03, 0.12).translate(x, CH - 0.08, -W * 0.45), glow)));
+    return G;
+  }
   // 機櫃：深色本體 + 正面貼圖
   const body = mat({ color: 0x1a1b1e, roughness: 0.55, metalness: 0.5 });
   const front = mat({ map: rackFrontTex(), roughness: 0.6, metalness: 0.2 });
@@ -299,6 +338,8 @@ export class PodScene {
     this.scene.environment = hi && this.envRT ? this.envRT.texture : null;
     for (const [k, parts] of [['shell', this.shellParts], ['cooler', this.coolerParts]]) (this.sets[k] || []).forEach((m, i) => { m.material = hi ? parts[i].mat : parts[i].lite; });
     (this.sets.skid || []).forEach((m, i) => { m.material = hi ? this.skidParts[i].mat : this.skidParts[i].lite; });
+    (this.sets.chiller || []).forEach((m, i) => { m.material = hi ? this.chillerParts[i].mat : this.chillerParts[i].lite; });
+    if (this.sets.boxChiller) this.sets.boxChiller[0].material = this._boxMat('cool');
     if (this.sets.boxSkid) this.sets.boxSkid[0].material = this._boxMat('skid');
     if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.boxCool[1].material = this._boxMat('deck'); this.sets.boxBand[0].material = this._boxMat('band'); this.sets.rack[0].material = this._boxMat('rack'); }
     this.scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
@@ -317,7 +358,9 @@ export class PodScene {
       return parts;
     };
     // 散熱模組 GLB 以自身底面為 0；疊放在貨櫃頂上 → 墊高一個貨櫃高（USD 端是 Reference 的 translate，同一個數）
-    [this.shellParts, this.coolerParts, this.skidParts] = await Promise.all([grab('container.glb'), grab('cooler_module.glb', CH), grab('power_skid.glb')]);
+    [this.shellParts, this.coolerParts, this.skidParts, this.chillerParts] = await Promise.all([grab('container.glb'), grab('cooler_module.glb', CH), grab('power_skid.glb'), grab('chiller.glb')]);
+    this.boxChillerGeo = new THREE.BoxGeometry(6.0, 2.6, 2.4).translate(3.0, 1.3, -1.2);
+    this.bandMats = this.shellParts.filter(p => /Band/.test(p.name)).flatMap(p => [p.mat, p.lite]);   // 產品色帶（DSX 綠 / GADU 藍灰）
     this.boxSkidGeo = new THREE.BoxGeometry(SKID_L, SKID_H, W).translate(SKID_L / 2, SKID_H / 2, -W / 2);
     this.boxShellGeo = new THREE.BoxGeometry(L, CH, W).translate(L / 2, CH / 2, -W / 2);
     this.boxCoolGeo = new THREE.BoxGeometry(L, MH, W).translate(L / 2, CH + MH / 2, -W / 2);
@@ -340,9 +383,11 @@ export class PodScene {
       skid: this.skidParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
       boxSkid: [mk(this.boxSkidGeo, this._boxMat('skid'), cap)],
       skidPlinth: [mk(new THREE.BoxGeometry(SKID_L - 0.3, BASE_Y, W - 0.3).translate(SKID_L / 2, -BASE_Y / 2, -W / 2), this._boxMat('plinth'), cap)],
+      chiller: this.chillerParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap * 2)),
+      boxChiller: [mk(this.boxChillerGeo, this._boxMat('cool'), cap * 2)],
       busway: [mk(new THREE.BoxGeometry(SKID_GAP + 0.3, 0.2, 0.8).translate(-(SKID_GAP + 0.3) / 2 + 0.15, 0.1 - BASE_Y, -W / 2), this._boxMat('busway'), cap)],   // 800 VDC 地面線槽
     };
-    this.skidPicker = this.sets.boxSkid[0];
+    this.skidPicker = this.sets.boxSkid[0]; this.chillerPicker = this.sets.boxChiller[0];
     this.picker = this.sets.boxShell[0];
     this.cap = cap;
   }
@@ -362,6 +407,9 @@ export class PodScene {
     const sk = [...this.sets.skid, ...this.sets.boxSkid, ...this.sets.skidPlinth, ...this.sets.busway];   // 800 VDC 電力中心：貨櫃東端 + 1.5 m，中間地面線槽
     pods.forEach((p, i) => { M.makeTranslation(p.x + L + SKID_GAP, BASE_Y, -p.y); sk.forEach(m => m.setMatrixAt(i, M)); });
     sk.forEach(m => { m.count = n; m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
+    const nCh = this.sku ? Number(this.sku.chillers) : 0, chs = [...this.sets.chiller, ...this.sets.boxChiller]; let kc = 0;   // GADU：每單位 1–2 台冰水機（北側）
+    if (nCh) pods.forEach(p => { for (let k = 0; k < nCh; k++) { M.makeTranslation(p.x + 0.5 + k * 6.6, 0, -(p.y + W + 1.0)); chs.forEach(m => m.setMatrixAt(kc, M)); kc++; } });
+    chs.forEach(m => { m.count = kc; m.instanceMatrix.needsUpdate = true; if (kc) m.computeBoundingSphere(); });
     this.n = n; this.pods = pods;
     const [sx, sy] = layout.site_m; this.extent = { sx, sy, cx: sx / 2 - SETBACK, cy: sy / 2 - SETBACK };
     this._sitePads(layout);
@@ -641,6 +689,18 @@ export class PodScene {
     return { pos, tgt };
   }
 
+  isGadu() { return !!(this.product && this.product.cooling_mode === 'chilled_water'); }
+
+  // 產品切換：色帶顏色、冰水機 / 散熱模組顯示、內部排列（setLayout 之前呼叫）
+  setProduct(product, sku) {
+    this.product = product; this.sku = sku;
+    const c = new THREE.Color(...(product.band_rgb || [0.46, 0.73, 0]));
+    (this.bandMats || []).forEach(m => m.color.copy(c));
+    for (const q of ['high', 'lite']) if (this._boxMats) this._boxMats[q].band.color.copy(c);
+    if (this.sets.shell) this._applyVis();
+    this.dirty = true;
+  }
+
   _focusPod() { return this.pods && this.pods[0]; }              // 西南角第一個 POD（最靠近鏡頭、在大門那一側）
 
   _viewPose(mode) {
@@ -653,6 +713,10 @@ export class PodScene {
     }
     const p = this._focusPod(), k = Math.max(1, Math.sqrt(1 / this.camera.aspect));
     const pc = V(p.x + L / 2, BASE_Y, -(p.y + W / 2));
+    if (mode === 'cool' && this.isGadu()) {                      // GADU：北側的氣冷冰水機（從北邊看，貨櫃在後面）
+      const n = Number(this.sku.chillers) || 1, cc = V(p.x + 0.5 + (n * 6.6 - 0.6) / 2, BASE_Y + 1.3, -(p.y + W + 1.0 + 1.2));
+      return { tgt: cc, pos: cc.clone().add(V(-9 * k, 6 + 2 * k, -12 * k)) };
+    }
     if (mode === 'cool') return { tgt: pc.clone().add(V(0, CH + MH * 0.5, 0)), pos: pc.clone().add(V(-12 * k, CH + MH + 8 * k, 15 * k)) };
     if (mode === 'skid') {                                       // 800 VDC 電力中心 + 地面線槽 + 貨櫃東端
       const sc = V(p.x + L + SKID_GAP + SKID_L * 0.35, BASE_Y + 1.2, -(p.y + W / 2));
@@ -694,7 +758,7 @@ export class PodScene {
     const p = this._focusPod(), G = this.cut = new THREE.Group(); G.position.set(p.x, BASE_Y, -p.y);
     const CUT = new Set(['Wall_S', 'Wall_S_Band', 'Door_Hardware']);
     for (const part of this.shellParts) if (!CUT.has(part.name)) { const m = new THREE.Mesh(part.geo, this.quality === 'high' ? part.mat : part.lite); m.castShadow = m.receiveShadow = true; G.add(m); }
-    G.add(buildInterior(this.quality));
+    G.add(buildInterior(this.quality, this.product, this.sku));
     this.scene.add(G); this._hidePod(0); this.dirty = true;
   }
 
@@ -703,9 +767,12 @@ export class PodScene {
   _applyVis() {
     const detail = this.lod === 'detail';
     this.sets.shell.forEach(m => m.visible = detail && this.vis.shell);
-    this.sets.cooler.forEach(m => m.visible = detail && this.vis.cooler);
+    const gadu = this.isGadu();
+    this.sets.cooler.forEach(m => m.visible = detail && this.vis.cooler && !gadu);
+    this.sets.chiller.forEach(m => m.visible = detail && gadu);
+    this.sets.boxChiller[0].visible = !detail && gadu;
     this.sets.boxShell[0].visible = !detail && this.vis.shell;
-    this.sets.boxCool.forEach(m => m.visible = !detail && this.vis.cooler);
+    this.sets.boxCool.forEach(m => m.visible = !detail && this.vis.cooler && !gadu);
     this.sets.boxBand[0].visible = !detail && this.vis.shell;
     this.sets.rack[0].visible = this.vis.rack;
     this.sets.skid.forEach(m => m.visible = detail);
@@ -733,6 +800,12 @@ export class PodScene {
     }
     const hp = ray.intersectObject(this.picker, false)[0];
     const hs = this.subHit ? ray.intersectObject(this.subHit, false)[0] : null;
+    const hc = this.chillerPicker && this.chillerPicker.count ? ray.intersectObject(this.chillerPicker, false)[0] : null;
+    if (hc && hc.instanceId !== undefined && (!hp || hc.distance < hp.distance) && (!hs || hc.distance < hs.distance)) {
+      const nCh = Number(this.sku.chillers) || 1, pi = Math.floor(hc.instanceId / nCh), k = hc.instanceId % nCh, p = this.pods[pi], x0 = p.x + 0.5 + k * 6.6, z0 = -(p.y + W + 1.0);
+      this.highlight.box.set(new THREE.Vector3(x0 - 0.1, -0.05, z0 - 2.5), new THREE.Vector3(x0 + 6.1, 2.75, z0 + 0.1)); this.highlight.visible = true;
+      return { kind: 'chiller', index: pi, k, ...p };
+    }
     const hk = ray.intersectObject(this.skidPicker, false)[0];
     if (hk && hk.instanceId !== undefined && (!hp || hk.distance < hp.distance) && (!hs || hk.distance < hs.distance)) {   // 電力模組
       const p = this.pods[hk.instanceId], x0 = p.x + L + SKID_GAP;
