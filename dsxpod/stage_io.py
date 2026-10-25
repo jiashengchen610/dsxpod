@@ -29,11 +29,16 @@ def _sum_attr(prims, name):
     return (sum(vals), len(vals)) if vals else (None, 0)
 
 
+VISUAL_VARIANT_SETS = {"geometry"}
+
+
 def current_variants(stage, pod_path=POD_PATH):
     """POD 的 VariantSet 選擇 + 場址（/World/Site 的 site 變體）。"""
     out = {}
     pod = stage.GetPrimAtPath(pod_path); vs = pod.GetVariantSets()
-    for n in vs.GetNames(): out[n] = vs.GetVariantSet(n).GetVariantSelection()
+    for n in vs.GetNames():
+        if n in VISUAL_VARIANT_SETS: continue                # 只影響顯示（真實幾何 / 方塊），不進結果命名與模型
+        out[n] = vs.GetVariantSet(n).GetVariantSelection()
     site = stage.GetPrimAtPath(SITE_PATH)
     if site and site.IsValid() and site.GetVariantSets().HasVariantSet("site"):
         out["site"] = site.GetVariantSets().GetVariantSet("site").GetVariantSelection()

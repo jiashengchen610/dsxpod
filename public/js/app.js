@@ -130,6 +130,7 @@ function presetUI(itMW) {
 function kpiStrip(m) {
   const racks = layout.n_pods * 7, ef = racks * RUBIN.pf_inf / 1000;
   const gwh = m.facility_mwh / 1000;
+  $('#dataTagKpi').textContent = `PUE ${fmt(m.pue_mean, 3)}${m.valid ? '' : ' ⚠'}`;
   $('#kpiStrip').innerHTML = [
     [fmt(m.pue_mean, 3), m.valid ? 'PUE・可滿載' : 'PUE・⚠缺口', m.valid ? 'good' : 'bad'],
     [gwh >= 1000 ? `${fmt(gwh / 1000, 2)} TWh` : `${fmt(gwh, gwh < 100 ? 1 : 0)} GWh`, '設施耗電／年', ''],
@@ -231,21 +232,22 @@ const sheetToggle = (open) => { document.body.classList.toggle('sheet-open', ope
 $('#sheetHead').onclick = () => sheetToggle();
 { let y0 = null; $('#sheetHead').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
   $('#sheetHead').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy < 0); } }); }
-$('#navCollapse').onclick = () => { if (document.body.classList.contains('mobile')) { document.body.classList.remove('menu-open'); return; } $('#nav').classList.toggle('collapsed'); $('#navCollapse').textContent = $('#nav').classList.contains('collapsed') ? '›' : '‹'; };
-// 顯示：貨櫃殼與散熱模組全開、內部機櫃不顯示（不再提供切換）
-// 全螢幕瀏覽：收起兩側面板＋瀏覽器全螢幕；Esc、F 或按鈕還原
-function setImmersive(on) {
-  document.body.classList.toggle('immersive', on);
-  $('#fsBtn').textContent = on ? '✕ 顯示面板' : '⛶ 全螢幕瀏覽';
-  try {
-    if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
-    if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
-  } catch {}
+// 面板縮小 / 展開（桌機、平板）：各自縮成小標籤，左下按鈕一次收起或展開兩側；記住使用者的選擇。不使用瀏覽器全螢幕（平板上會干擾互動）。
+function setMin(which, on) {
+  document.body.classList.toggle(which + '-min', on);
+  store.set('min', { nav: document.body.classList.contains('nav-min'), data: document.body.classList.contains('data-min') });
+  const both = document.body.classList.contains('nav-min') && document.body.classList.contains('data-min');
+  $('#fsBtn').textContent = both ? '⇔ 展開兩側' : '⇔ 收起兩側';
+  if (!on) setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300);
 }
-$('#fsBtn').onclick = () => setImmersive(!document.body.classList.contains('immersive'));
-document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('immersive')) setImmersive(false); });
-addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) setImmersive(!document.body.classList.contains('immersive')); });
-if (Q.get('view') === 'full') { document.body.classList.add('immersive'); $('#fsBtn').textContent = '✕ 顯示面板'; }
+$('#navCollapse').onclick = () => { if (document.body.classList.contains('mobile')) { document.body.classList.remove('menu-open'); return; } setMin('nav', true); };
+$('#dataCollapse').onclick = () => setMin('data', true);
+$('#navTag').onclick = () => setMin('nav', false);
+$('#dataTag').onclick = () => setMin('data', false);
+const toggleBoth = () => { const both = document.body.classList.contains('nav-min') && document.body.classList.contains('data-min'); setMin('nav', !both); setMin('data', !both); };
+$('#fsBtn').onclick = toggleBoth;
+addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) toggleBoth(); });
+{ const m = Q.get('view') === 'full' ? { nav: true, data: true } : store.get('min', { nav: false, data: false }); setMin('nav', !!m.nav); setMin('data', !!m.data); }
 
 let tipTimer;
 // 觸控：點一下（移動 < 8 px）顯示資訊，3 秒後消失
@@ -270,9 +272,11 @@ addEventListener('pointermove', e => {
 });
 
 async function checkApi() {
-  try { const r = await fetch('api/health', { cache: 'no-store' }); apiOK = r.ok; } catch { apiOK = false; }
+  let geo = 'box';
+  try { const r = await fetch('api/health', { cache: 'no-store' }); apiOK = r.ok; if (r.ok) geo = (await r.json()).geometry || 'box'; } catch { apiOK = false; }
+  const GEO = { full: '含真實模型（Vertiv CDU / UPS、GB300 機櫃低模，約 30 MB）', vertiv: '含 Vertiv 真實模型', box: '輕量包（方塊；附 fetch_real_geometry.py 可下載 Vertiv 真實模型）' };
   $('#exportBtn').disabled = !apiOK;
-  $('#exportHint').textContent = apiOK ? 'zip：USD（pod.usda／campus.usda、結果層、檢查層、資產）＋ results.json／CSV＋ params.json。用 USD Composer 開。' : '匯出需要後端：本機執行 .venv\\Scripts\\python.exe -m dsxpod.server（部署版走 /api/export 函式）。';
+  $('#exportHint').textContent = apiOK ? `zip：USD（pod.usda／campus.usda、結果層、檢查層）＋ results.json／CSV＋ params.json；${GEO[geo] || GEO.box}。用 USD Composer 開，Window > Collection 可一次選取全部 POD／機櫃／CDU。` : '匯出需要後端：本機執行 .venv\\Scripts\\python.exe -m dsxpod.server（部署版走 /api/export 函式）。';
 }
 $('#exportBtn').onclick = async () => {
   const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = '產生中…（約 3–10 秒）';

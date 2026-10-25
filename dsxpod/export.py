@@ -25,15 +25,51 @@ GRID = next((d / "data" / "results_grid.json" for d in (ROOT / "web", ROOT / "pu
 VERTIV_ASSETS = ("XDU2300AA0S000F", "MCV430_6FAN", "APM2")
 
 
-def _copy_assets(dst_data, include_proxy):
+# 真實幾何：Vertiv（Hugging Face Vertiv/simready-assets，CC-BY-4.0，可再散布）與 GB300 低模（NVIDIA DSX 內容包，只在本機匯出）
+VERTIV_FULL = ("XDU2300AA0S000F", "APM2")              # CDU、UPS；乾冷卻器疊放時外觀用生成的散熱模組，不需要 MCV430 完整幾何
+ON_VERCEL = bool(os.environ.get("VERCEL"))
+
+
+def available_geometry():
+    """這台機器能打包的最完整幾何等級。部署環境（Vercel）沒有大型資產，也不散布 NGC 內容 → box。"""
+    if ON_VERCEL: return "box"
+    vertiv = all((DATA / "simready_assets" / "vertiv" / a / "full").exists() for a in VERTIV_FULL)
+    nvidia = (DATA / "simready_assets" / "nvidia" / "GB300" / "proxy" / "proxy_GB300.usd").exists()
+    return "full" if vertiv and nvidia else "vertiv" if vertiv else "box"
+
+
+def _copy_assets(dst_data, geometry="box"):
     (dst_data / "assets" / "dsx_pod").mkdir(parents=True, exist_ok=True)
     for f in (DATA / "assets" / "dsx_pod").glob("*.usda"): shutil.copy(f, dst_data / "assets" / "dsx_pod" / f.name)
     g = DATA / "simready_assets" / "nvidia" / "GB300"
     shutil.copytree(g / "layers", dst_data / "simready_assets" / "nvidia" / "GB300" / "layers")
-    if include_proxy and (g / "proxy").exists(): shutil.copytree(g / "proxy", dst_data / "simready_assets" / "nvidia" / "GB300" / "proxy")
+    if geometry == "full" and (g / "proxy").exists(): shutil.copytree(g / "proxy", dst_data / "simready_assets" / "nvidia" / "GB300" / "proxy")
     for a in VERTIV_ASSETS:
         src = DATA / "simready_assets" / "vertiv" / a / "layers"
         if src.exists(): shutil.copytree(src, dst_data / "simready_assets" / "vertiv" / a / "layers")
+    if geometry in ("vertiv", "full"):
+        for a in VERTIV_FULL:
+            src = DATA / "simready_assets" / "vertiv" / a / "full"
+            if src.exists(): shutil.copytree(src, dst_data / "simready_assets" / "vertiv" / a / "full")
+
+
+FETCH_SCRIPT = '''"""下載 Vertiv 真實幾何（Hugging Face Vertiv/simready-assets，CC-BY-4.0）到這個匯出包裡，之後在 Composer 把 /World/Plant 的 geometry 變體切成 vertiv。
+用法：python fetch_real_geometry.py（只需要 Python 3 標準函式庫）。GB300 機櫃低模來自 NVIDIA DSX 內容包（NGC），需自行取得，不在這裡下載。"""
+import json, urllib.request, urllib.parse
+from pathlib import Path
+HERE = Path(__file__).resolve().parent / "data" / "simready_assets" / "vertiv"
+UA = {"User-Agent": "Mozilla/5.0"}
+for asset in ("XDU2300AA0S000F", "APM2"):
+    lst = json.load(urllib.request.urlopen(urllib.request.Request(f"https://huggingface.co/api/datasets/Vertiv/simready-assets/tree/main/{asset}?recursive=true", headers=UA), timeout=60))
+    for f in (x for x in lst if x["type"] == "file"):
+        out = HERE / asset / "full" / f["path"][len(asset) + 1:]
+        if out.exists() and out.stat().st_size == f.get("size"): continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        url = "https://huggingface.co/datasets/Vertiv/simready-assets/resolve/main/" + urllib.parse.quote(f["path"])
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r: out.write_bytes(r.read())
+        print("ok", f["path"])
+print("完成。Composer 開 pod.usda → 選 /World/Plant → Property 面板 Variants → geometry = vertiv")
+'''
 
 
 def grid_lookup(site, cooling, supply, mw):
@@ -49,14 +85,18 @@ def grid_lookup(site, cooling, supply, mw):
     return rows[-1] if x >= math.log(rows[-1]["mw"]) else rows[0]
 
 
-def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry_only", supply="t45", include_proxy=False):
+def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry_only", supply="t45", include_proxy=None, geometry=None):
+    """geometry：box / vertiv / full；None = 這台機器能打包的最完整等級（本機 full、Vercel box）。include_proxy 是舊參數（True ≈ full）。"""
     assert site in SITES and cooling in COOLING and supply in SUPPLY_TEMP
+    avail = available_geometry(); order = ["box", "vertiv", "full"]
+    if geometry is None: geometry = "full" if include_proxy else avail
+    geometry = order[min(order.index(geometry if geometry in order else "box"), order.index(avail))]
     layout = sizing.plan(mw=mw, site_l=site_l, site_w=site_w) if (mw is not None or (site_l and site_w)) else sizing.plan(mw=1)
     tmp = Path(tempfile.mkdtemp(prefix="dsxpod_export_")); pkg = tmp / "dsx_pod_export"; d = pkg / "data"
     t0 = time.time()
     try:
-        _copy_assets(d, include_proxy)
-        usd_out.configure(d, include_proxy=include_proxy)
+        _copy_assets(d, geometry)
+        usd_out.configure(d, include_proxy=(geometry == "full"))
         st = usd_out.build(site_key=site, layout=layout, cooling=cooling, supply=supply)
         set_variants(st, session=False, site=site, cooling=cooling, supply_temp=supply)      # 選擇寫進根層：開檔就是匯出時的配置
         p = stage_to_params(st)
@@ -105,17 +145,20 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
 場址：{SITES[site]['name']}　規模：{layout['n_pods']} 個 POD（{layout['it_mw']:g} MW IT 銘牌，{layout['n_blocks']} 區塊）　散熱：{COOLING[cooling]['label']}　供水：{SUPPLY_LABEL[supply]}
 PUE 20 年均 {sm['pue_mean']:.3f}　每年排不掉熱 {sm['unmet_h_mean']:.0f} 小時　冰水機 {sm['chiller_mwh_mean']:,.0f} MWh/年　用水 {sm['water_m3_mean']:,.0f} m³/年
 
-開啟：用 USD Composer 開 {main}（upAxis Z、公尺）。/World/Plant 上有 VariantSet cooling、supply_temp；/World/Site 有 site。
+開啟：用 USD Composer 開 {main}（upAxis Z、公尺）。/World/Plant 上有 VariantSet cooling、supply_temp、geometry；/World/Site 有 site。
+幾何：目前 geometry = {geometry}（box = 方塊；vertiv = Vertiv CDU / UPS 真實模型；full = 再加 GB300 機櫃低模）。{'這份是輕量包：執行 python fetch_real_geometry.py 下載 Vertiv 模型後，把 geometry 切成 vertiv。' if geometry == 'box' else ''}
+一次選取：Window > Collection，/World/Plant 下有 pods（完整單元）、shells、coolerModules、dryCoolers、racks、cdus、utility，右鍵 Select Contents。
+出處：Vertiv 模型與規格層來自 Hugging Face Vertiv/simready-assets（CC-BY-4.0，© Vertiv）；GB300 規格層與低模來自 NVIDIA DSX Content Pack（NGC，依其授權條款，僅供評估）。
 結果來源：{source}
 檔案：results.json（摘要、逐年、佈局、檢查）、results_annual.csv、params.json（每個模型參數的 USD 來源）。
 假設：Vera Rubin NVL72 以 GB300 規格代理；貨櫃與散熱模組外殼為程式生成；再循環與園區熱島為篩選等級估算，關鍵場址需 CFD 驗證。
-{'GB300 低模未包含（payload 會顯示找不到檔案，不影響規格與能耗）。' if not include_proxy else ''}
 """, encoding="utf-8")
+        if geometry != "full": (pkg / "fetch_real_geometry.py").write_text(FETCH_SCRIPT, encoding="utf-8")
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for f in pkg.rglob("*"):
                 if f.is_file(): z.write(f, f.relative_to(tmp).as_posix())
-        meta = dict(bytes=buf.tell(), n_pods=layout["n_pods"], mode=layout["mode"], seconds=round(time.time() - t0, 1), result_source=source)
+        meta = dict(bytes=buf.tell(), n_pods=layout["n_pods"], mode=layout["mode"], seconds=round(time.time() - t0, 1), result_source=source, geometry=geometry)
         return buf.getvalue(), meta
     finally:
         usd_out.configure(None)
@@ -127,5 +170,5 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--site", default="johor"); ap.add_argument("--mw", type=float, default=10); ap.add_argument("--cooling", default="dry_only")
     ap.add_argument("--supply", default="t45"); ap.add_argument("--proxy", action="store_true"); ap.add_argument("--out", default=str(ROOT / "data" / "results" / "export_test.zip"))
     a = ap.parse_args()
-    b, m = export_package(a.site, mw=a.mw, cooling=a.cooling, supply=a.supply, include_proxy=a.proxy)
+    b, m = export_package(a.site, mw=a.mw, cooling=a.cooling, supply=a.supply, include_proxy=a.proxy or None)
     Path(a.out).write_bytes(b); print(m, "→", a.out)

@@ -15,8 +15,9 @@ const SVC_W = 6, PUB_W = 8, GATE = 4.5;                         // 廠內道路�
 const ROAD_LEN = 6000;                                          // 廠外公路往東西兩側各延伸到霧裡
 const PUB_Z = SETBACK + 9;                                      // 廠外公路中心（three z）：南側圍籬外 9 m
 const RACKS = Array.from({ length: 7 }, (_, i) => [2.5 + i * 0.6, 0.06]);   // 與 dsxpod/usd_out.rack_positions 一致
-const DETAIL_DIST = { high: 260, lite: 140 };                   // 鏡頭距離 > 這個 → 方塊（輕量畫質提早切）
-const ALWAYS_DETAIL = { high: 56, lite: 24 };                   // POD 數不超過這個時，不論遠近都畫細節模型
+const DETAIL_DIST = 260;                                        // 高畫質：鏡頭距離 > 這個 → 色塊
+const ALWAYS_DETAIL = 56;                                       // 高畫質：POD 數不超過這個時，不論遠近都畫細節模型
+// 輕量畫質一律用色塊（白色貨櫃 + 綠色腰帶 + 灰色散熱模組 + 深色風扇面），不畫降級後的細節模型
 const ACCENT = 0x76b900;
 const subScale = s => Math.max(0.4, Math.min(1, s.l / 40));     // 小陣列：變電站等比縮小（接近箱式變電站的量體）
 // 地面疊層（鋪面、基座、道路、路肩、地界）：幾公分的高差在遠景分不出深度 → 一閃一閃（z-fighting）。
@@ -109,10 +110,10 @@ function substationTemplate() {
   for (const dx of [-3.5, 3.5]) P.dark.push(box(1.3, 2.4, 0.06, 34 + dx, 1.5, -4.97));
   for (let i = 0; i < 4; i++) P.dark.push(box(1.1, 0.6, 0.06, 34 - 1.8 + i * 1.2, 3.0, -4.97));
   P.steel.push(box(1.2, 0.7, 0.9, 31.5, 4.75, -9), box(1.2, 0.7, 0.9, 36.5, 4.75, -9));
-  P.concrete.push(box(1.0, 0.08, 9, 34, 0.04, -15.5));          // 電纜溝蓋板往區塊
+  P.concrete.push(box(1.0, 0.16, 9, 34, 0.08, -15.5));          // 電纜溝蓋板往區塊（加厚，和區塊基座拉開高差）
   const M = {
-    gravel: new THREE.MeshStandardMaterial({ color: 0x9c9d97, roughness: 1 }),
-    concrete: new THREE.MeshStandardMaterial({ color: 0xb4b5ae, roughness: 0.9 }),
+    gravel: flat(new THREE.MeshStandardMaterial({ color: 0x9c9d97, roughness: 1 }), 7),          // 變電站地面部件排在鋪面（1）、基座（3）、地界（6）之上，避免遠景閃爍
+    concrete: flat(new THREE.MeshStandardMaterial({ color: 0xb4b5ae, roughness: 0.9 }), 8),
     steel: new THREE.MeshStandardMaterial({ color: 0x9aa0a5, roughness: 0.45, metalness: 0.7 }),
     tx: new THREE.MeshStandardMaterial({ color: 0x8a948f, roughness: 0.5, metalness: 0.45 }),
     fin: new THREE.MeshStandardMaterial({ color: 0x7c8681, roughness: 0.55, metalness: 0.45 }),
@@ -120,7 +121,7 @@ function substationTemplate() {
     fence: new THREE.MeshStandardMaterial({ color: 0xc4c9cc, roughness: 0.6, metalness: 0.5, transparent: true, opacity: 0.22, depthWrite: false }),
     house: new THREE.MeshStandardMaterial({ color: 0xe3e5e0, roughness: 0.6, metalness: 0.1 }),
     roof: new THREE.MeshStandardMaterial({ color: 0x5f6468, roughness: 0.7, metalness: 0.3 }),
-    dark: new THREE.MeshStandardMaterial({ color: 0x2c3034, roughness: 0.6, metalness: 0.3 }),
+    dark: flat(new THREE.MeshStandardMaterial({ color: 0x2c3034, roughness: 0.6, metalness: 0.3 }), 2),
   };
   return Object.entries(P).map(([k, geos]) => ({ geo: mergeGeometries(geos), mat: M[k], shadow: k !== 'fence' && k !== 'gravel' }));
 }
@@ -153,7 +154,7 @@ export class PodScene {
     const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'high', powerPreference: quality === 'high' ? 'high-performance' : 'low-power' });
     r.setPixelRatio(this._dpr()); r.setSize(innerWidth, innerHeight);
     r.shadowMap.enabled = quality === 'high'; r.shadowMap.type = THREE.PCFSoftShadowMap; r.outputColorSpace = THREE.SRGBColorSpace;
-    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 0.62;
+    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = quality === 'high' ? 0.62 : 0.85;
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0xbfcad0); this.scene.fog = new THREE.Fog(0xbfcad0, 800, 4000);
     this.camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.5, 9000);
     this.controls = new OrbitControls(this.camera, canvas); this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.47;
@@ -186,8 +187,10 @@ export class PodScene {
   // 遠景方塊 / 機櫃材質：高畫質 PBR，輕量 Lambert（沒有環境光時 PBR 金屬感會發黑）
   _boxMat(kind) {
     this._boxMats ||= {
-      high: { shell: new THREE.MeshStandardMaterial({ color: 0xc9cbca, roughness: 0.7, metalness: 0.2 }), cool: new THREE.MeshStandardMaterial({ color: 0x8c9096, roughness: 0.6, metalness: 0.4 }), rack: new THREE.MeshStandardMaterial({ color: 0x1c1c1f, roughness: 0.5, metalness: 0.6 }) },
-      lite: { shell: new THREE.MeshLambertMaterial({ color: 0xd4d6d4 }), cool: new THREE.MeshLambertMaterial({ color: 0x9a9fa5 }), rack: new THREE.MeshLambertMaterial({ color: 0x2a2a2e }) },
+      high: { shell: new THREE.MeshStandardMaterial({ color: 0xdcdedb, roughness: 0.6, metalness: 0.15 }), cool: new THREE.MeshStandardMaterial({ color: 0x9a9fa5, roughness: 0.55, metalness: 0.35 }), rack: new THREE.MeshStandardMaterial({ color: 0x1c1c1f, roughness: 0.5, metalness: 0.6 }),
+              band: new THREE.MeshStandardMaterial({ color: 0x76b900, roughness: 0.6 }), deck: new THREE.MeshStandardMaterial({ color: 0x4a4e53, roughness: 0.7, metalness: 0.3 }) },
+      lite: { shell: new THREE.MeshLambertMaterial({ color: 0xe8eae7 }), cool: new THREE.MeshLambertMaterial({ color: 0xa3a8ae }), rack: new THREE.MeshLambertMaterial({ color: 0x2a2a2e }),
+              band: new THREE.MeshLambertMaterial({ color: 0x76b900 }), deck: new THREE.MeshLambertMaterial({ color: 0x55595e }) },
     };
     return this._boxMats[this.quality][kind];
   }
@@ -199,11 +202,11 @@ export class PodScene {
     if (q === this.quality) return;
     this.quality = q; const hi = q === 'high';
     this.renderer.setPixelRatio(this._dpr()); this.renderer.shadowMap.enabled = hi; this.sun.castShadow = hi;
-    this.sky.visible = hi; this.hemi.intensity = hi ? 0.55 : 1.15;
+    this.sky.visible = hi; this.hemi.intensity = hi ? 0.55 : 1.15; this.renderer.toneMappingExposure = hi ? 0.62 : 0.85;   // 輕量沒有天空環境光 → 曝光拉高，色塊才乾淨
     if (hi && this.envDirty) this._bakeEnv();
     this.scene.environment = hi && this.envRT ? this.envRT.texture : null;
     for (const [k, parts] of [['shell', this.shellParts], ['cooler', this.coolerParts]]) (this.sets[k] || []).forEach((m, i) => { m.material = hi ? parts[i].mat : parts[i].lite; });
-    if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.rack[0].material = this._boxMat('rack'); }
+    if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.boxCool[1].material = this._boxMat('deck'); this.sets.boxBand[0].material = this._boxMat('band'); this.sets.rack[0].material = this._boxMat('rack'); }
     this.scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
     this.lod = null; this.updateLod(); this._buildSurroundings(); this.dirty = true;
     this.onQualityChange && this.onQualityChange(q, why);
@@ -223,6 +226,8 @@ export class PodScene {
     [this.shellParts, this.coolerParts] = await Promise.all([grab('container.glb'), grab('cooler_module.glb', CH)]);
     this.boxShellGeo = new THREE.BoxGeometry(L, CH, W).translate(L / 2, CH / 2, -W / 2);
     this.boxCoolGeo = new THREE.BoxGeometry(L, MH, W).translate(L / 2, CH + MH / 2, -W / 2);
+    this.boxBandGeo = new THREE.BoxGeometry(L + 0.03, 0.32, W + 0.03).translate(L / 2, 0.42, -W / 2);              // 綠色腰帶（同 GLB 的 Band）
+    this.boxDeckGeo = new THREE.BoxGeometry(L - 0.5, 0.08, W - 0.5).translate(L / 2, CH + MH + 0.04, -W / 2);      // 風扇面
     this.rackGeo = new THREE.BoxGeometry(0.6, 2.3, 1.2).translate(0.3, 0.1 + 1.15, -0.6);
   }
 
@@ -233,7 +238,8 @@ export class PodScene {
       shell: this.shellParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
       cooler: this.coolerParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
       boxShell: [mk(this.boxShellGeo, this._boxMat('shell'), cap)],
-      boxCool: [mk(this.boxCoolGeo, this._boxMat('cool'), cap)],
+      boxCool: [mk(this.boxCoolGeo, this._boxMat('cool'), cap), mk(this.boxDeckGeo, this._boxMat('deck'), cap)],
+      boxBand: [mk(this.boxBandGeo, this._boxMat('band'), cap)],
       rack: [mk(this.rackGeo, this._boxMat('rack'), cap * 7)],
     };
     this.picker = this.sets.boxShell[0];
@@ -245,7 +251,7 @@ export class PodScene {
     const pods = layout.pods; const n = pods.length;
     if (n > this.cap) this._alloc(Math.max(64, 2 ** Math.ceil(Math.log2(n))));
     const M = new THREE.Matrix4();
-    const all = [...this.sets.shell, ...this.sets.cooler, ...this.sets.boxShell, ...this.sets.boxCool];
+    const all = [...this.sets.shell, ...this.sets.cooler, ...this.sets.boxShell, ...this.sets.boxCool, ...this.sets.boxBand];
     pods.forEach((p, i) => { M.makeTranslation(p.x, 0, -p.y); all.forEach(m => m.setMatrixAt(i, M)); });
     const rk = this.sets.rack[0]; let k = 0;
     pods.forEach(p => RACKS.forEach(([x, y]) => { M.makeTranslation(p.x + x, 0, -(p.y + y)); rk.setMatrixAt(k++, M); }));
@@ -534,13 +540,14 @@ export class PodScene {
     this.sets.shell.forEach(m => m.visible = detail && this.vis.shell);
     this.sets.cooler.forEach(m => m.visible = detail && this.vis.cooler);
     this.sets.boxShell[0].visible = !detail && this.vis.shell;
-    this.sets.boxCool[0].visible = !detail && this.vis.cooler;
+    this.sets.boxCool.forEach(m => m.visible = !detail && this.vis.cooler);
+    this.sets.boxBand[0].visible = !detail && this.vis.shell;
     this.sets.rack[0].visible = this.vis.rack;
   }
 
   updateLod() {
     const d = this.camera.position.distanceTo(this.controls.target);
-    const want = d > DETAIL_DIST[this.quality] && this.n > ALWAYS_DETAIL[this.quality] ? 'box' : 'detail';
+    const want = this.quality === 'lite' || (d > DETAIL_DIST && this.n > ALWAYS_DETAIL) ? 'box' : 'detail';
     if (want !== this.lod) { this.lod = want; this._applyVis(); }
     return this.lod;
   }

@@ -170,18 +170,65 @@ def add_vertiv_props(prim, asset):
         if f.exists(): prim.GetReferences().AddReference(rel(f))
 
 
-def add_full_geometry(prim, main_usd, size, rotate_z=0.0, note=""):
-    """有真實幾何就 Reference 到子 prim "Full"（資產原點在底部中心 → 平移半個足跡），佔位 Geom 改 purpose=proxy。"""
-    if not Path(main_usd).exists(): return False
-    g = UsdGeom.Xform.Define(prim.GetStage(), prim.GetPath().AppendChild("Full"))
-    g.AddTranslateOp().Set(Gf.Vec3d(size[0] / 2, size[1] / 2, 0.0))
-    if rotate_z: g.AddRotateZOp().Set(rotate_z)
-    g.GetPrim().GetPayloads().AddPayload(rel(main_usd))          # payload：Composer 可在 Stage 面板卸載內部幾何
-    Usd.ModelAPI(g.GetPrim()).SetKind(Kind.Tokens.subcomponent)
-    g.GetPrim().SetInstanceable(True)
-    UsdGeom.Imageable(prim.GetChild("Geom")).CreatePurposeAttr(UsdGeom.Tokens.proxy)
-    attr(prim, "aif:core:geometryNote", Sdf.ValueTypeNames.String, note or f"geometry: {Path(main_usd).name} (instanceable reference); Geom = proxy box")
-    return True
+# 真實幾何登記表：build() 結束時寫進 /World/Plant 的 "geometry" VariantSet（box / vertiv / full）。
+# 這樣檔案不在（例如線上匯出的輕量 zip）也不會有壞掉的 payload；補上資產後在 Composer 切變體即可。
+REAL_GEO = []        # dict(path, main, size, rotate_z, source)  source: "vertiv"（CC-BY-4.0，可再散布）/ "nvidia"（NGC 內容包，僅本機）
+GEOMETRY_LEVELS = (("box", ()), ("vertiv", ("vertiv",)), ("full", ("vertiv", "nvidia")))
+
+
+def add_full_geometry(prim, main_usd, size, rotate_z=0.0, note="", source="vertiv"):
+    """登記真實幾何：變體選到時 Reference（payload）到子 prim "Full"（資產原點在底部中心 → 平移半個足跡），佔位 Geom 改 purpose=proxy。"""
+    REAL_GEO.append(dict(path=prim.GetPath(), main=Path(main_usd), size=size, rotate_z=rotate_z, source=source))
+    attr(prim, "aif:core:geometryNote", Sdf.ValueTypeNames.String,
+         (note + "; " if note else "") + f"real geometry: {Path(main_usd).name} via /World/Plant geometry variant ({source}); Geom = box")
+    return Path(main_usd).exists()
+
+
+def author_geometry_variants(stage):
+    """/World/Plant 的 geometry VariantSet：box（全部方塊）、vertiv（Vertiv CDU / UPS / 乾冷卻器用真實模型）、full（再加 GB300 機櫃低模）。
+    只寫 Full 子 prim 與 Geom 的 purpose，不碰 cooling / supply_temp 會寫的屬性。預設選檔案都在的最完整那一級。"""
+    plant = stage.GetPrimAtPath(PLANT)
+    vs = plant.GetVariantSets().AddVariantSet("geometry")
+    for name, srcs in GEOMETRY_LEVELS:
+        vs.AddVariant(name); vs.SetVariantSelection(name)
+        with vs.GetVariantEditContext():
+            for e in REAL_GEO:
+                if e["source"] not in srcs: continue
+                g = UsdGeom.Xform.Define(stage, e["path"].AppendChild("Full"))
+                g.AddTranslateOp().Set(Gf.Vec3d(e["size"][0] / 2, e["size"][1] / 2, 0.0))
+                if e["rotate_z"]: g.AddRotateZOp().Set(e["rotate_z"])
+                g.GetPrim().GetPayloads().AddPayload(rel(e["main"]))       # payload：Composer 可在 Stage 面板卸載
+                Usd.ModelAPI(g.GetPrim()).SetKind(Kind.Tokens.subcomponent); g.GetPrim().SetInstanceable(True)
+                UsdGeom.Imageable(stage.GetPrimAtPath(e["path"].AppendChild("Geom"))).CreatePurposeAttr(UsdGeom.Tokens.proxy)
+    have = lambda srcs: all(e["main"].exists() for e in REAL_GEO if e["source"] in srcs)
+    default = next((n for n, srcs in reversed(GEOMETRY_LEVELS) if have(srcs)), "box")
+    vs.SetVariantSelection(default)
+    attr(plant, "aif:core:geometryVariants", Sdf.ValueTypeNames.String,
+         "geometry: box = proxy boxes; vertiv = Vertiv CDU/UPS/dry cooler (Hugging Face Vertiv/simready-assets, CC-BY-4.0); full = + GB300 low-poly rack (NVIDIA DSX content pack, local only)")
+    return default
+
+
+def author_collections(stage):
+    """一次選取用的 USD Collection（掛在 /World/Plant；Composer：Window > Collection，右鍵 Select Contents）。
+    explicitOnly：只選列出的 prim（例如每個 POD 的根），不會把底下幾千個子 prim 都選進去。"""
+    plant = stage.GetPrimAtPath(PLANT)
+    pods = [c for c in plant.GetChildren() if c.GetName().startswith("POD_")]
+    sets = {
+        "pods": [c.GetPath() for c in pods],
+        "shells": [c.GetPath().AppendChild("Shell") for c in pods],
+        "coolerModules": [c.GetPath().AppendChild("CoolerModule") for c in pods if c.GetChild("CoolerModule")],
+        "dryCoolers": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("DryCooler_")],
+        "racks": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("Rack_")],
+        "cdus": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("CDU_")],
+        "utility": [q.GetPath() for q in plant.GetChild("Utility").GetChildren()] if plant.GetChild("Utility") else [],
+    }
+    for name, paths in sets.items():
+        if not paths: continue
+        c = Usd.CollectionAPI.Apply(plant, name)
+        c.CreateExpansionRuleAttr(Usd.Tokens.explicitOnly)
+        rel_ = c.CreateIncludesRel()
+        for q in paths: rel_.AddTarget(q)
+    return {k: len(v) for k, v in sets.items()}
 
 
 def add_gb300(prim, facing):
@@ -200,10 +247,7 @@ def add_gb300(prim, facing):
         note = "aif:* fallback from NVIDIA DSX docs; stand-in for Vera Rubin NVL72"
     attr(prim, "aif:core:standInFor", Sdf.ValueTypeNames.String, "NVIDIA Vera Rubin NVL72 (DSX POD: 7 per container)")
     proxy = GB300 / "proxy" / "proxy_GB300.usd"
-    if INCLUDE_PROXY and proxy.exists():
-        add_full_geometry(prim, proxy, RACK_SIZE, rotate_z=(90.0 if facing > 0 else -90.0), note=note + "; geometry: proxy_GB300.usd")
-    else:
-        attr(prim, "aif:core:geometryNote", Sdf.ValueTypeNames.String, note)
+    add_full_geometry(prim, proxy, RACK_SIZE, rotate_z=(90.0 if facing > 0 else -90.0), note=note, source="nvidia")
     attr(prim, "layout:facing", Sdf.ValueTypeNames.Token, "+y" if facing > 0 else "-y", "front (air intake / service) side")
 
 
@@ -260,7 +304,8 @@ def build_pod(stage, path, origin, looks, heat_rejection, n_coolers):
     eq = UsdGeom.Scope.Define(stage, f"{path}/Equipment").GetPrim(); Usd.ModelAPI(eq).SetKind(Kind.Tokens.group)
     c = box(stage, f"{path}/Equipment/CDU_01", EQUIP["CDU"]["size"], (0.3, (W - EQUIP['CDU']['size'][1]) / 2, 0.10), ("CDU", looks["CDU"]), Kind.Tokens.component)
     add_vertiv_props(c, EQUIP["CDU"]["asset"]); attr(c, "layout:facing", Sdf.ValueTypeNames.Token, "+x")
-    attr(c, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "placeholder box; Vertiv XDU2300 spec layer")
+    add_full_geometry(c, VERTIV / EQUIP["CDU"]["asset"] / "full" / "simready_usd" / f"{EQUIP['CDU']['asset']}_main.usd", EQUIP["CDU"]["size"],
+                      note="Vertiv XDU2300 spec layer", source="vertiv")
 
     # 乾冷卻器（疊在頂上）：外觀 = 程式生成的散熱模組資產；容量 / 風扇電 = 模組內 3 個 Vertiv MCV430 規格 prim（Geom 為 proxy，Composer 不顯示）
     if heat_rejection == "stacked":
@@ -289,8 +334,7 @@ def make_drycooler(stage, path, pos, looks, placement, enclosed=False):
         attr(d, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "spec carrier inside the procedural cooler module enclosure; Geom = proxy footprint")
         return d
     full = VERTIV / EQUIP["DryCooler"]["asset"] / "full" / "simready_usd" / f"{EQUIP['DryCooler']['asset']}_main.usd"
-    if not add_full_geometry(d, full, EQUIP["DryCooler"]["size"], note="geometry: Vertiv MCV430_6FAN_main.usd (Hugging Face Vertiv/simready-assets)"):
-        attr(d, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "placeholder box (download Vertiv MCV430 full geometry to data/simready_assets/vertiv/MCV430_6FAN/full/)")
+    add_full_geometry(d, full, EQUIP["DryCooler"]["size"], note="Vertiv MCV430 (Hugging Face Vertiv/simready-assets)", source="vertiv")
     return d
 
 
@@ -315,6 +359,7 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     blk0 = [p for p in layout["pods"] if p["block"] == 0]
     n_pods = len(blk0)
     defaults = Params()
+    REAL_GEO.clear()
     old_sublayers = []
     if OUT.exists():
         lyr = Sdf.Layer.FindOrOpen(str(OUT)); old_sublayers = list(lyr.subLayerPaths); lyr.Clear(); lyr.Save()
@@ -378,7 +423,8 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     ut = UsdGeom.Scope.Define(stage, f"{PLANT}/Utility").GetPrim(); Usd.ModelAPI(ut).SetKind(Kind.Tokens.group)
     ups = box(stage, f"{PLANT}/Utility/UPS_01", EQUIP["UPS"]["size"], (-4.0, 0.0, 0.0), ("UPS", looks["UPS"]), Kind.Tokens.component)
     add_vertiv_props(ups, EQUIP["UPS"]["asset"]); attr(ups, "layout:facing", Sdf.ValueTypeNames.Token, "-x")
-    attr(ups, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "placeholder box; Vertiv APM2 spec layer (site-level power, efficiency feeds the UPS loss)")
+    add_full_geometry(ups, VERTIV / EQUIP["UPS"]["asset"] / "full" / "simready_usd" / f"{EQUIP['UPS']['asset']}_main.usd", EQUIP["UPS"]["size"],
+                      note="Vertiv APM2 spec layer (site-level power, efficiency feeds the UPS loss)", source="vertiv")
     ch = box(stage, f"{PLANT}/Utility/Chiller_01", (2.0, 1.2, 2.0), (-4.0, 3.0, 0.0), ("Chiller", looks["Chiller"]), Kind.Tokens.component)
     attr(ch, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Chiller")
     attr(ch, "aif:core:assetDescription", Sdf.ValueTypeNames.String, "Placeholder air-cooled trim chiller; active only in cooling = dry_plus_chiller")
@@ -416,6 +462,8 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
         with tv.GetVariantEditContext():
             attr(plant, "aif:spec:referenceFacilityCoolantTemperature", Sdf.ValueTypeNames.Double, t, "TCS supply water temperature (C)")
     tv.SetVariantSelection(supply)
+    author_geometry_variants(stage)
+    author_collections(stage)
 
     root = stage.GetRootLayer()
     for sl in old_sublayers:
