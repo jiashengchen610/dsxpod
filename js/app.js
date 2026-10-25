@@ -129,9 +129,10 @@ function presetUI(itMW) {
 // ---------------------------------------------------------------- 結果
 function kpiStrip(m) {
   const racks = layout.n_pods * 7, ef = racks * RUBIN.pf_inf / 1000;
+  const gwh = m.facility_mwh / 1000;
   $('#kpiStrip').innerHTML = [
-    [fmt(m.pue_mean, 3), m.valid ? 'PUE・全年可滿載' : 'PUE・⚠ 排熱缺口', m.valid ? 'good' : 'bad'],
-    [`${fmt(m.facility_mwh / 1000, 1)} GWh`, '設施耗電／年', ''],
+    [fmt(m.pue_mean, 3), m.valid ? 'PUE・可滿載' : 'PUE・⚠缺口', m.valid ? 'good' : 'bad'],
+    [gwh >= 1000 ? `${fmt(gwh / 1000, 2)} TWh` : `${fmt(gwh, gwh < 100 ? 1 : 0)} GWh`, '設施耗電／年', ''],
     [`${fmt(m.water_m3)} m³`, '用水／年', ''],
     [`${fmt(ef, ef < 100 ? 1 : 0)} EF`, '算力（NVFP4）', ''],
   ].map(([v, l, c]) => `<div class="${c}"><b>${v}</b><span>${l}</span></div>`).join('');

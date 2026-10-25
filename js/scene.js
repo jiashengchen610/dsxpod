@@ -516,8 +516,11 @@ export class PodScene {
     this.controls.target.set(cx, 0, -cy);
     const side = this.camera.aspect < 1 ? 0.28 : 0.62;                   // 直式螢幕用比較正面的視角，基地才放得進中間
     this.camera.position.set(cx - span * side, span * 0.3 + 12, -cy + span * 1.05 + 22);   // 低一點的視角，看得到地平線與天空
-    const k = Math.max(1, Math.sqrt(1 / this.camera.aspect));             // 直式螢幕（手機）拉遠一點，左右才放得下
-    if (k > 1) this.camera.position.sub(this.controls.target).multiplyScalar(k).add(this.controls.target);
+    // 依水平視角算距離：基地外接圓（半徑約 0.62 × 邊長）要放得進左右視野；直式手機會自動拉遠
+    const v = this.camera.position.clone().sub(this.controls.target);
+    const hHalf = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect);
+    const need = (span * 0.62) / Math.sin(hHalf);
+    if (v.length() < need) this.camera.position.copy(this.controls.target).add(v.setLength(need));
     this.controls.update(); this.dirty = true;
   }
 
