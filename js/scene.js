@@ -10,6 +10,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const L = 12.192, W = 2.438, CH = 2.896, MH = 3.2;            // 貨櫃長寬高、散熱模組高
 const SETBACK = 10;                                             // 與 sizing 一致：佈局原點在退縮線內 10 m
+const ROAD_Z = SETBACK - 5;                                     // 服務道路中心（three z）= USD y −5：退縮帶內、變電站正門前
+const SVC_W = 6, PUB_W = 8, GATE = 4.5;                         // 廠內道路寬、廠外公路寬、大門半寬
+const ROAD_LEN = 6000;                                          // 廠外公路往東西兩側各延伸到霧裡
+const PUB_Z = SETBACK + 9;                                      // 廠外公路中心（three z）：南側圍籬外 9 m
 const RACKS = Array.from({ length: 7 }, (_, i) => [2.5 + i * 0.6, 0.06]);   // 與 dsxpod/usd_out.rack_positions 一致
 const DETAIL_DIST = 260;                                        // 鏡頭距離 > 這個 → 方塊
 const ACCENT = 0x76b900;
@@ -52,6 +56,17 @@ function label(text, { bg = 'rgba(14,15,16,.82)', fg = '#fff', accent = '#76b900
   g.fillStyle = accent; g.fillRect(0, 0, 8, c.height); g.fillStyle = fg; g.textBaseline = 'middle'; g.fillText(text, 22, c.height / 2 + 2);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true })); s.userData.aspect = w / c.height; s.renderOrder = 10; return s;
+}
+
+// 廠外柏油路貼圖：沿長度 24 m 一格，白色邊線 + 黃色虛線中線
+function asphaltTex() {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128; const g = c.getContext('2d'); const r = rng(5);
+  g.fillStyle = '#3b3d3f'; g.fillRect(0, 0, 512, 128);
+  for (let i = 0; i < 9000; i++) { g.globalAlpha = 0.18; g.fillStyle = r() < 0.5 ? '#2a2b2c' : '#55585a'; g.fillRect(r() * 512, r() * 128, 1.5, 1.5); }
+  g.globalAlpha = 0.9; g.fillStyle = '#e8e8e2'; g.fillRect(0, 6, 512, 4); g.fillRect(0, 118, 512, 4);
+  g.fillStyle = '#e2b53a'; g.fillRect(0, 61, 128, 6); g.fillRect(256, 61, 128, 6);
+  g.globalAlpha = 1;
+  const t = new THREE.CanvasTexture(c); t.wrapS = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
 }
 
 const box = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
@@ -206,6 +221,7 @@ export class PodScene {
     this._sitePads(layout);
     this._substations(layout);
     this._boundary(layout);
+    this._roads(layout);
     this._placeSun();
     this._buildSurroundings();
     this.highlight.visible = false;
@@ -259,7 +275,9 @@ export class PodScene {
     G.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: ACCENT })));
     // 圍籬柱（每 4 m）+ 網
     const posts = []; const step = 4;
-    const perim = [[x0, z0, x1, z0], [x1, z0, x1, z1], [x1, z1, x0, z1], [x0, z1, x0, z0]];
+    // 南側圍籬在大門處留缺口（大門對準第一座變電站的開關室）
+    const gx = this.gateX = this._gateX(layout, x0, x1);
+    const perim = [[x0, z0, gx - GATE, z0], [gx + GATE, z0, x1, z0], [x1, z0, x1, z1], [x1, z1, x0, z1], [x0, z1, x0, z0]].filter(([a, b, c, d]) => Math.hypot(c - a, d - b) > 0.3);
     for (const [ax, az, bx2, bz] of perim) { const len = Math.hypot(bx2 - ax, bz - az); for (let s = 0; s < len; s += step) posts.push([ax + (bx2 - ax) * s / len, az + (bz - az) * s / len]); }
     const pm = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.05, 2.4, 5).translate(0, 1.2, 0), new THREE.MeshStandardMaterial({ color: 0x8d9398, metalness: 0.6, roughness: 0.5 }), posts.length);
     const M = new THREE.Matrix4(); posts.forEach(([x, z], i) => pm.setMatrixAt(i, M.makeTranslation(x, 0, z))); pm.castShadow = true; G.add(pm);
@@ -294,7 +312,7 @@ export class PodScene {
     this.sun.color.set(this.lat > 45 ? 0xffe9d0 : 0xfff6ea);
     const gt = noiseTex(e.ground, { seed: 11, rows: e.paddy ? 8 : 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
     this.groundMat.map?.dispose(); this.groundMat.map = gt; this.groundMat.needsUpdate = true;
-    if (rebuild && this.layout) { this._placeSun(); this._buildSurroundings(); }
+    if (rebuild && this.layout) { this._placeSun(); this._roads(this.layout); this._buildSurroundings(); }
   }
 
   _placeSun() {
@@ -319,7 +337,8 @@ export class PodScene {
     const margin = 14;
     const inSite = (x, z, m = margin) => x > x0 - m && x < x1 + m && z < z0 + m && z > z1 - m;
     const lists = {};                                                // kind → [x, z, scale, rotY, colorHex]
-    const add = (kind, x, z, s, col) => (lists[kind] ||= []).push([x, z, s, r() * Math.PI * 2, col]);
+    const onRoad = (x, z, m = 0) => Math.abs(z - PUB_Z) < PUB_W / 2 + 6 + m || (Math.abs(x - this.gateX) < GATE + 4 && z > z0 - 2 && z < PUB_Z);   // 公路走廊、大門不種樹
+    const add = (kind, x, z, s, col) => { if (!onRoad(x, z)) (lists[kind] ||= []).push([x, z, s, r() * Math.PI * 2, col]); };
     const leafCols = { broad: ['#4f6e2f', '#5b7a36', '#456528', '#6a843d'], palm: ['#4f7a2a', '#5e8a32', '#43701f'], conifer: ['#2f4a2a', '#36522f', '#294226', '#3d5a33'],
                        shrub: ['#7d7a4a', '#6f7044', '#8a8455'], hedge: ['#3f6a2c', '#4a7433'], bamboo: ['#6f9442', '#7fa24c'] };
     const pick = (k) => { const a = leafCols[k] || leafCols.broad; return a[Math.floor(r() * a.length)]; };
@@ -361,6 +380,7 @@ export class PodScene {
       }
       for (const [x, z, len, a] of segs) {
         if (inSite(x, z, margin + len / 2)) continue;
+        if (a === 'x' ? Math.abs(z - PUB_Z) < PUB_W + 6 : Math.abs(z - PUB_Z) < len / 2 + PUB_W) continue;
         (lists.hedgeSeg ||= []).push([x, z, len, a, pick('hedge')]);
         for (let k = 0; k < 3; k++) if (r() < 0.5) { const t = (r() - 0.5) * len; add('broad', a === 'x' ? x + t : x, a === 'x' ? z : z + t, 0.8 + r() * 0.5, pick('broad')); }
       }
@@ -400,6 +420,50 @@ export class PodScene {
       }
       this.surround.add(m);
     }
+  }
+
+  // 道路：廠內混凝土（變電站前的服務道路 + 區塊間道路）；南側大門出去接廠外柏油公路（東西向，延伸到地平線）
+  _roads(layout) {
+    if (this.roads) { this.roads.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); }); this.scene.remove(this.roads); }
+    const G = this.roads = new THREE.Group(); this.scene.add(G);
+    const { x0, x1, z1 } = this.siteRect;
+    const concrete = new THREE.MeshStandardMaterial({ color: 0xa9aaa3, roughness: 0.85 });
+    const curb = new THREE.MeshStandardMaterial({ color: 0xd2d3cc, roughness: 0.8 });
+    const flat = (w, d, x, z, y, mat) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), mat); m.position.set(x, y, z); m.receiveShadow = true; G.add(m); return m; };
+    // 1) 廠內服務道路：退縮帶裡、第一排變電站正門前，橫貫基地
+    flat(x1 - x0 - 3, SVC_W, (x0 + 1.5 + x1) / 2, ROAD_Z, 0.09, concrete);
+    for (const dz of [-SVC_W / 2, SVC_W / 2]) flat(x1 - x0 - 3, 0.25, (x0 + 1.5 + x1) / 2, ROAD_Z + dz, 0.1, curb);
+    // 2) 園區：每排區塊前（變電站門前）的東西向道路、區塊之間的南北向道路
+    if (layout.mode === 'campus') {
+      const b0 = layout.blocks[0]; const cellX = layout.blocks.find(b => b.x > 0)?.x; const rowsY = [...new Set(layout.blocks.map(b => b.substation.y))].filter(y => y > 0);
+      for (const y of rowsY) flat(x1 - x0 - 3, 10, (x0 + 1.5 + x1) / 2, -(y - 6), 0.09, concrete);
+      if (cellX) for (let x = cellX; x < x1; x += cellX) flat(10, (SETBACK - 2) - (z1 + 2), x - 6, ((SETBACK - 2) + (z1 + 2)) / 2, 0.085, concrete);
+    }
+    // 3) 大門（南側）：門柱、柵欄機、警衛亭；廠內混凝土車道接到圍籬，圍籬外換柏油接公路
+    const { z0 } = this.siteRect; const gx = this.gateX;
+    flat(2 * GATE - 1, z0 - (ROAD_Z + SVC_W / 2), gx, (z0 + ROAD_Z + SVC_W / 2) / 2, 0.095, concrete);
+    const post = new THREE.MeshStandardMaterial({ color: 0x8d9398, metalness: 0.6, roughness: 0.5 });
+    for (const dx of [-GATE, GATE]) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.8, 0.5), post); m.position.set(gx + dx, 1.4, z0); m.castShadow = true; G.add(m); }
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(GATE * 1.7, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0xd8382b, roughness: 0.5 }));
+    arm.position.set(gx - GATE * 0.12, 1.1, z0 + 0.6); G.add(arm);
+    const booth = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.6, 2.4), new THREE.MeshStandardMaterial({ color: 0xe3e5e0, roughness: 0.6 }));
+    booth.position.set(gx + GATE + 2.2, 1.3, z0 - 2.0); booth.castShadow = true; G.add(booth);
+    // 4) 廠外公路：柏油 + 標線 + 路肩，東西向延伸到霧裡；大門前一段柏油引道
+    const t = asphaltTex(); t.repeat.set(2 * ROAD_LEN / 24, 1);
+    const asphalt = new THREE.MeshStandardMaterial({ map: t, roughness: 0.95 });
+    const plain = new THREE.MeshStandardMaterial({ color: 0x3b3d3f, roughness: 0.95 });
+    const shoulder = new THREE.MeshStandardMaterial({ color: this.envKey === 'phoenix' ? 0xb7976f : 0x8a826e, roughness: 1 });
+    const cx = (x0 + x1) / 2;
+    flat(2 * ROAD_LEN, PUB_W, cx, PUB_Z, 0.1, asphalt);
+    for (const dz of [-(PUB_W / 2 + 0.9), PUB_W / 2 + 0.9]) flat(2 * ROAD_LEN, 1.8, cx, PUB_Z + dz, 0.07, shoulder);
+    flat(2 * GATE + 2, PUB_Z - PUB_W / 2 - z0, gx, (z0 + PUB_Z - PUB_W / 2) / 2, 0.1, plain);
+  }
+
+  _gateX(layout, x0, x1) {                                        // 大門對準第一座變電站開關室（樣板 x = 34 m），沒有就放中間
+    const b = layout.blocks.find(q => q.substation);
+    if (!b) return (x0 + x1) / 2;
+    const s = b.substation, k = subScale(s);
+    return Math.min(x1 - GATE - 2, Math.max(x0 + GATE + 2, s.x + Math.max(0, (s.l - 40 * k) / 2) + 34 * k));
   }
 
   _view() {                                                       // 鏡頭 / 陰影 / 霧以基地範圍為準（基地輸入時可能比佈局大）

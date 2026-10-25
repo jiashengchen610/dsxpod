@@ -178,7 +178,20 @@ function update() {
 // ---------------------------------------------------------------- 分頁、收合、顯示、提示、匯出
 function tabs(root) { $$(`${root} .tab`).forEach(t => t.onclick = () => { $$(`${root} .tab`).forEach(x => x.classList.toggle('active', x === t)); $$(`${root} .tabpane`).forEach(p => p.classList.toggle('active', p.dataset.pane === t.dataset.tab)); Object.values(charts).forEach(c => c.resize()); }); }
 $('#navCollapse').onclick = () => { $('#nav').classList.toggle('collapsed'); $('#navCollapse').textContent = $('#nav').classList.contains('collapsed') ? '›' : '‹'; };
-['vShell', 'vCool', 'vRack'].forEach(id => $('#' + id).onchange = () => scene.setVisible({ shell: $('#vShell').checked, cooler: $('#vCool').checked, rack: $('#vRack').checked }));
+// 顯示：貨櫃殼與散熱模組全開、內部機櫃不顯示（不再提供切換）
+// 全螢幕瀏覽：收起兩側面板＋瀏覽器全螢幕；Esc、F 或按鈕還原
+function setImmersive(on) {
+  document.body.classList.toggle('immersive', on);
+  $('#fsBtn').textContent = on ? '✕ 顯示面板' : '⛶ 全螢幕瀏覽';
+  try {
+    if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+    if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  } catch {}
+}
+$('#fsBtn').onclick = () => setImmersive(!document.body.classList.contains('immersive'));
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('immersive')) setImmersive(false); });
+addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) setImmersive(!document.body.classList.contains('immersive')); });
+if (Q.get('view') === 'full') { document.body.classList.add('immersive'); $('#fsBtn').textContent = '✕ 顯示面板'; }
 
 let tipTimer;
 addEventListener('pointermove', e => {
@@ -219,6 +232,7 @@ $('#exportBtn').onclick = async () => {
   if (Q.get('tab')) $(`#data .tab[data-tab="${Q.get('tab')}"]`)?.click();
   if (Q.get('nav')) $(`#nav .tab[data-tab="${Q.get('nav')}"]`)?.click();
   if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
-  scene.start(lod => { $('#lodBadge').textContent = lod === 'detail' ? '細節' : '遠景方塊'; });
+  scene.setVisible({ shell: true, cooler: true, rack: false });
+  scene.start();
   $('#loading').classList.add('done'); checkApi();
 })();
