@@ -37,19 +37,28 @@ class Req(BaseModel):
 
 @app.get("/api/health")
 def health():
-    return dict(ok=True, weather_cache=(ROOT / "data" / "weather" / "johor_2005_2024.csv").exists(), grid=GRID_JSON.exists())
+    try:                                                     # 部署診斷：usd-core 能否載入
+        from pxr import Usd
+        usd = ".".join(map(str, Usd.GetVersion()))
+    except Exception as e:
+        usd = f"ERROR {type(e).__name__}: {e}"[:300]
+    return dict(ok=True, weather_cache=(ROOT / "data" / "weather" / "johor_2005_2024.csv").exists(), grid=GRID_JSON.exists(), usd=usd)
 
 
 @app.post("/api/export")
 def export(req: Req):
-    from .export import export_package
     try:
+        from .export import export_package
         data, meta = export_package(req.site, mw=req.mw, site_l=req.site_l, site_w=req.site_w, cooling=req.cooling, supply=req.supply, include_proxy=req.include_proxy)
     except (AssertionError, ValueError) as e:
         raise HTTPException(400, str(e))
+    except Exception as e:                                   # 回傳錯誤摘要（最後幾層 traceback），部署環境看不到日誌時好診斷
+        import traceback
+        tb = traceback.format_exc().strip().splitlines()[-6:]
+        return JSONResponse({"error": f"{type(e).__name__}: {e}", "trace": tb}, status_code=500)
     size = f"{req.mw:g}MW" if req.mw else f"{req.site_l:g}x{req.site_w:g}m"
     name = f"dsx_pod_{req.site}_{size}_{req.cooling}_{req.supply}.zip"
-    return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"', "X-Export-Meta": str(meta).replace("\n", " ")})
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"', "X-Export-Meta": str(meta).replace("\n", " ").encode("ascii", "replace").decode("ascii")})
 
 
 @app.post("/api/simulate")
