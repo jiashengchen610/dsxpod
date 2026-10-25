@@ -1,0 +1,589 @@
+#usda 1.0
+(
+    defaultPrim = "APM2"
+)
+
+over "APM2"
+{
+    custom int aif:core:accessibilityRequirement = 600 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Service clearance in mm (front-access design eliminates service clearance) [AIF-MANAGED]"
+    )
+    custom string aif:core:aifthermal = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "AIF_Thermal [AIF-MANAGED]"
+    )
+    custom string aif:core:assetClass = "UPS" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Class of AI Factory Equipment [AIF-MANAGED]"
+    )
+    custom string aif:core:assetCreationDate = "2026-07-31 00:00:00" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Creation Date of Revision of Asset ISO 8601 format (YYYY-MM-DD) [AIF-MANAGED]"
+    )
+    custom string aif:core:assetDescription = "Liebert APM2 - Modular, high-density UPS with scalable architecture, hot-swappable modules, 10-150kVA (208V) or 20-600kVA (480V/415V)" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Human Readable Description of Asset [AIF-MANAGED]"
+    )
+    custom string aif:core:assetValidatorVersion = "get_asset_validator_id()" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Asset Validator version [AIF-MANAGED]"
+    )
+    custom string aif:core:assetVersion = "0.1" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Design Revision of Digital Twin Asset [AIF-MANAGED]"
+    )
+    custom string aif:core:connectsToModelDocumentation = "https://www.vertiv.com/en-us/products-catalog/critical-power/uninterruptible-power-supplies-ups/vertiv-liebert-apm2-series-modular-ups/" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Url to online documentation [AIF-MANAGED]"
+    )
+    custom int aif:core:depth = 1030 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment depth in mm [AIF-MANAGED]"
+    )
+    custom string aif:core:geometrympv = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Geometry_MPV [AIF-MANAGED]"
+    )
+    custom int aif:core:height = 2000 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment height in mm [AIF-MANAGED]"
+    )
+    custom int aif:core:installationClearance = 600 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Installation Clearance in mm [AIF-MANAGED]"
+    )
+    custom string aif:core:manufacturer = "Vertiv" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment manufacturer name [AIF-MANAGED]"
+    )
+    custom string aif:core:modelNumber = "Liebert APM2" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment model number [AIF-MANAGED]"
+    )
+    custom vector3f aif:core:overallGeometryDimensions = (1200, 1030, 2000) (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Overall Geometry (WxDxH) (metric) [AIF-MANAGED]"
+    )
+    custom string aif:core:sceneOptimizerVersion = "get_scene_optimizer_id()" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Scene Optimizer version [AIF-MANAGED]"
+    )
+    custom string aif:core:simreadyVersion = "0.2.0" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "SimReady version [AIF-MANAGED]"
+    )
+    custom int aif:core:weight = 830 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment weight in kilograms [AIF-MANAGED]"
+    )
+    custom int aif:core:width = 1200 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment width in mm [AIF-MANAGED]"
+    )
+    custom string aif:coreaifelectrical = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "AIF_Electrical [AIF-MANAGED]"
+    )
+    custom int aif:spec:batteryFloatVoltage = 480 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Battery Float Voltage [AIF-MANAGED]"
+    )
+    custom string aif:spec:batteryType = "VRLA or Lithium-Ion" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Battery Type (supports both internal VRLA and Lithium-Ion, 10-120kVA) [AIF-MANAGED]"
+    )
+    custom int aif:spec:batteryWeight = 35 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Battery Weight in kg [AIF-MANAGED]"
+    )
+    custom int aif:spec:bypassFrequencyTolerance = 10 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Bypass frequency tolerance in percentage [AIF-MANAGED]"
+    )
+    custom string aif:spec:cardCompatibility = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Card Compatibility [AIF-MANAGED]"
+    )
+    custom string aif:spec:color = "RAL7021" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Color [AIF-MANAGED]"
+    )
+    custom string aif:spec:communicationOptions = "UNITY communication cards, Power Insight, Environet Alert" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Communication and monitoring options [AIF-MANAGED]"
+    )
+    custom string aif:spec:dcRippleVoltage = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "DC Ripple at Float Voltage [AIF-MANAGED]"
+    )
+    custom float aif:spec:doubleConversionEfficiency = 97.5 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Double conversion efficiency [AIF-MANAGED]"
+    )
+    custom int aif:spec:ecoModeEfficiency = 99 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "ECO mode efficiency in percentage [AIF-MANAGED]"
+    )
+    custom string aif:spec:electricalCurrent = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Current [AIF-MANAGED]"
+    )
+    custom int aif:spec:electricalInputFrequency = 60 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Input Frequency in HZ [AIF-MANAGED]"
+    )
+    custom int aif:spec:electricalInputPhase = 3 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Input Phase (three-phase) [AIF-MANAGED]"
+    )
+    custom int aif:spec:electricalInputVoltage = 208 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Nominal Input Voltage in V (208V or 480V models available) [AIF-MANAGED]"
+    )
+    custom int aif:spec:electricalOutputFrequency = 60 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Output Frequency in HZ [AIF-MANAGED]"
+    )
+    custom int aif:spec:electricalOutputPhase = 3 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Output Phase (three-phase) [AIF-MANAGED]"
+    )
+    custom string aif:spec:electricalPowerWalkIn = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Power Walk-in (seconds) [AIF-MANAGED]"
+    )
+    custom string aif:spec:inputCurrentDistortion = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Input Current Distortion (THDi) at Nominal Voltage at Full Load [AIF-MANAGED]"
+    )
+    custom float aif:spec:inputPowerFactor = 0.99 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Electrical Power Factor [AIF-MANAGED]"
+    )
+    custom float aif:spec:loadPowerFactor = 0.99 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Load Power Factor Supported (Without Derating) [AIF-MANAGED]"
+    )
+    custom int aif:spec:maxChargingCurrent = 140 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Max. charging current in A [AIF-MANAGED]"
+    )
+    custom string aif:spec:nominalBatteryBus = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Nominal Battery Bus [AIF-MANAGED]"
+    )
+    custom int aif:spec:operatingAltitude = 1500 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Operating Altitude without derating in Meters [AIF-MANAGED]"
+    )
+    custom float aif:spec:operatingTemperature = 313.15 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Operating Temperature in degK [AIF-MANAGED]"
+    )
+    custom int aif:spec:outputActivePower = 150 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Output Active Power at 104degF (kW) [AIF-MANAGED]"
+    )
+    custom string aif:spec:outputThdNominalVoltage = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Output THD at Nominal Voltage at RMS value [AIF-MANAGED]"
+    )
+    custom int aif:spec:outputThdNominalVoltageWithNonLinearLoad = 5 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Output THD at Nominal Voltage including a 100kVA Non Linear Load per IEC 6204 at RMS value [AIF-MANAGED]"
+    )
+    custom int aif:spec:outputVoltage = 415 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Output Voltage [AIF-MANAGED]"
+    )
+    custom string aif:spec:overloadAtNominalVoltage = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Overload at Nominal Voltage and 77degF (25degC) [AIF-MANAGED]"
+    )
+    custom int aif:spec:powerModuleCapacity = 60 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Power Module Capacity in KW [AIF-MANAGED]"
+    )
+    custom string aif:spec:protectionLevelIec = "IP20" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Protection level IEC [AIF-MANAGED]"
+    )
+    custom string aif:spec:protocolsAvailable = "MODBUS, SNMP, HTTP" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Protocols Available [AIF-MANAGED]"
+    )
+    custom int aif:spec:relativeHumidity = 95 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Relative Humidity non-condensing [AIF-MANAGED]"
+    )
+    custom string aif:spec:temperatureCompensatedBatteryCharging = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Temperature Compensated Battery Charging [AIF-MANAGED]"
+    )
+    custom string aif:spec:transientRecoveryLoad = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Transient Recovery 100 Load Step [AIF-MANAGED]"
+    )
+    custom string aif:spec:upsEnclosureClass = "IP 20" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "UPS Enclosure Class with and without front door open [AIF-MANAGED]"
+    )
+    custom int aif:spec:upsRating = 150 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "UPS Rating in kVA (208V model range: 10-150kVA) [AIF-MANAGED]"
+    )
+    custom string aif:spec:voltageDisplacement = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Voltage Displacement [AIF-MANAGED]"
+    )
+}
+

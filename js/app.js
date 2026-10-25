@@ -1,0 +1,214 @@
+// DSX POD 場址模擬（MVP）：六選一氣候帶 → 電量或基地 → 散熱與供水 → 看能耗 → 匯出 USD 與參數。
+// 結果用預算結果表（dsxpod/precompute.py）在 log(MW) 上內插；匯出呼叫本機或部署的 /api/export。
+import { plan } from './sizing.js';
+import { PodScene } from './scene.js';
+
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '–' : Number(v).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
+const COOL = { dry_only: '純乾冷卻器', dry_plus_chiller: '乾冷卻器＋冰水機', evaporative: '蒸發式' };
+const SUP = { t45: '45 °C', t32: '32 °C' };
+const SITE_ORDER = ['taoyuan', 'johor', 'phoenix', 'dallas', 'dublin', 'oslo'];
+
+const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem('dsxpod:' + k, JSON.stringify(v)); } catch {} } };
+const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45' }, store.get('state', {}));
+// 網址參數可覆寫（分享 / 測試用）：?site=phoenix&mw=200&cooling=evaporative&supply=t32&tab=cmp&nav=cool
+const Q = new URLSearchParams(location.search);
+for (const k of ['site', 'cooling', 'supply']) if (Q.get(k)) state[k] = Q.get(k);
+if (Q.get('mw')) { state.sizeMode = 'mw'; state.mw = +Q.get('mw'); }
+if (Q.get('site_l') && Q.get('site_w')) { state.sizeMode = 'site'; state.siteL = +Q.get('site_l'); state.siteW = +Q.get('site_w'); }
+let CLIM, GRID, scene, layout, lastPods = -1, apiOK = false;
+const charts = {};
+
+// ---------------------------------------------------------------- 資料
+function interp(site, cooling, supply, itMW) {
+  const rows = GRID.rows.filter(r => r.site === site && r.cooling === cooling && r.supply === supply).sort((a, b) => a.it_mw - b.it_mw);
+  if (!rows.length) return null;
+  const x = Math.log(Math.min(Math.max(itMW, rows[0].it_mw), rows[rows.length - 1].it_mw));
+  let a = rows[0], b = rows[0];
+  for (let i = 0; i < rows.length - 1; i++) if (Math.log(rows[i].it_mw) <= x && x <= Math.log(rows[i + 1].it_mw)) { a = rows[i]; b = rows[i + 1]; break; }
+  if (x >= Math.log(rows[rows.length - 1].it_mw)) a = b = rows[rows.length - 1];
+  const t = a === b ? 0 : (x - Math.log(a.it_mw)) / (Math.log(b.it_mw) - Math.log(a.it_mw));
+  const lerp = (u, v) => u + (v - u) * t;
+  const scale = itMW / lerp(a.it_mw, b.it_mw);                 // 能量按實際 MW 縮放（格點之間 POD 數不同）
+  const out = { pue_mean: lerp(a.pue_mean, b.pue_mean), pue_p90: lerp(a.pue_p90, b.pue_p90), unmet_h: lerp(a.unmet_h, b.unmet_h), unmet_h_max: Math.round(lerp(a.unmet_h_max, b.unmet_h_max)),
+    chiller_mwh: lerp(a.chiller_mwh, b.chiller_mwh) * scale, water_m3: lerp(a.water_m3, b.water_m3) * scale, facility_mwh: lerp(a.facility_mwh, b.facility_mwh) * scale,
+    it_mwh: lerp(a.it_mwh, b.it_mwh) * scale, recirc_k: lerp(a.recirc_k, b.recirc_k), island_k: lerp(a.island_k_3ms, b.island_k_3ms), years: {}, mix: {} };
+  for (const y of Object.keys(a.pue_by_year)) out.years[y] = lerp(a.pue_by_year[y], b.pue_by_year[y]);
+  for (const k of Object.keys(a.breakdown_mwh)) out.mix[k] = lerp(a.breakdown_mwh[k], b.breakdown_mwh[k]) * scale;
+  out.valid = out.unmet_h < 0.5;
+  return out;
+}
+
+function recommend(site, supply, itMW) {
+  const r = Object.keys(COOL).map(c => ({ c, m: interp(site, c, supply, itMW) })).filter(x => x.m);
+  const ok = r.filter(x => x.m.valid).sort((a, b) => a.m.pue_mean - b.m.pue_mean);
+  if (ok.length) {
+    const best = ok[0], dry = ok.find(x => x.c !== 'evaporative');
+    if (best.c === 'evaporative' && dry && dry.m.pue_mean - best.m.pue_mean < 0.01) return { c: dry.c, why: `不排熱失敗的方案中 PUE 最低（蒸發式只低 ${fmt((dry.m.pue_mean - best.m.pue_mean) * 1000, 1)}‰ 但每年用水 ${fmt(best.m.water_m3)} m³）` };
+    return { c: best.c, why: '每年 0 小時排不掉熱的方案中 PUE 最低' + (best.c === 'evaporative' ? `（代價：每年用水 ${fmt(best.m.water_m3)} m³）` : '') };
+  }
+  const least = r.sort((a, b) => a.m.unmet_h - b.m.unmet_h)[0];
+  return { c: least.c, why: '三種都有排不掉熱的小時；這個最少，建議改用較低外氣的場址或降低規模' };
+}
+
+// ---------------------------------------------------------------- UI：場址卡片
+function siteCards() {
+  const box = $('#siteCards'); box.innerHTML = '';
+  for (const k of SITE_ORDER) {
+    const c = CLIM[k]; if (!c) continue;
+    const b = document.createElement('button'); b.className = 'site' + (k === state.site ? ' on' : ''); b.dataset.site = k;
+    b.innerHTML = `<div class="nm">${c.name.replace(/（.*）/, '')}</div><div class="kp"><b>${c.koppen}</b>${c.koppen_name}・ASHRAE ${c.ashrae}</div><canvas></canvas>
+      <div class="ex"><span>${c.extremes.t_min}°</span><span>RH ${c.extremes.rh_mean}%</span><span>${c.extremes.t_max}°</span></div>`;
+    b.onclick = () => { state.site = k; $$('.site').forEach(x => x.classList.toggle('on', x.dataset.site === k)); update(); };
+    box.appendChild(b);
+    const m = c.monthly;
+    new Chart(b.querySelector('canvas'), { type: 'line', data: { labels: m.map(x => x.month), datasets: [
+      { data: m.map(x => x.t_max_mean), borderColor: css('--s2'), borderWidth: 1.5, pointRadius: 0, fill: '+1', backgroundColor: 'rgba(217,89,38,.18)', tension: .35 },
+      { data: m.map(x => x.t_min_mean), borderColor: css('--s1'), borderWidth: 1.5, pointRadius: 0, fill: false, tension: .35 }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false, events: [], plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: { x: { display: false }, y: { display: false, min: -20, max: 45 } } } });
+  }
+}
+
+// ---------------------------------------------------------------- UI：規模
+const mwFromSlider = v => Math.round(Math.pow(10, (v / 1000) * 3) * 10) / 10;
+const sliderFromMw = mw => Math.round(Math.log10(Math.max(1, mw)) / 3 * 1000);
+function sizeUI() {
+  $$('#sizeMode button').forEach(b => { b.classList.toggle('on', b.dataset.mode === state.sizeMode); b.onclick = () => { state.sizeMode = b.dataset.mode; sizeUI(); update(); }; });
+  $('#sizeMW').hidden = state.sizeMode !== 'mw'; $('#sizeSite').hidden = state.sizeMode !== 'site';
+  $('#mwRange').value = sliderFromMw(state.mw); $('#mwInput').value = state.mw; $('#mwOut').textContent = `${fmt(state.mw, state.mw < 10 ? 1 : 0)} MW`;
+  $('#slRange').value = state.siteL; $('#swRange').value = state.siteW; $('#slOut').textContent = `${state.siteL} m`; $('#swOut').textContent = `${state.siteW} m`;
+}
+$('#mwRange').oninput = e => { state.mw = mwFromSlider(+e.target.value); sizeUI(); update(); };
+$('#mwInput').onchange = e => { state.mw = Math.min(1000, Math.max(0.5, +e.target.value || 1)); sizeUI(); update(); };
+$('#slRange').oninput = e => { state.siteL = +e.target.value; sizeUI(); update(); };
+$('#swRange').oninput = e => { state.siteW = +e.target.value; sizeUI(); update(); };
+
+// ---------------------------------------------------------------- UI：散熱
+function segUI(id, key) { $$(`#${id} button`).forEach(b => { b.classList.toggle('on', b.dataset.v === state[key]); b.onclick = () => { state[key] = b.dataset.v; segUI(id, key); update(); }; }); }
+
+// ---------------------------------------------------------------- 結果
+function kpis(m) {
+  const pueCls = m.valid ? 'ok' : 'bad';
+  $('#kpis').innerHTML = [
+    [`${fmt(m.pue_mean, 3)}<span class="badge ${m.valid ? 'good' : 'bad'}">${m.valid ? '可採信' : '不可採信'}</span>`, 'PUE（20 年平均）', pueCls],
+    [`${fmt(m.unmet_h)}<small> h</small>`, '每年排不掉熱的小時（最壞 ' + fmt(m.unmet_h_max) + ' h）', m.valid ? 'ok' : 'bad'],
+    [`${fmt(m.facility_mwh / 1000, 1)}<small> GWh</small>`, '設施耗電／年（不含 IT）', 'ok'],
+    [`${fmt(m.chiller_mwh)}<small> MWh</small>`, '冰水機耗電／年', 'ok'],
+    [`${fmt(m.water_m3)}<small> m³</small>`, '用水／年', 'ok'],
+    [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, `進風溫升（再循環 ${fmt(m.recirc_k, 1)}＋熱島 ${fmt(m.island_k, 1)}，風 3 m/s）`, 'ok'],
+  ].map(([v, l, c]) => `<div class="kpi ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+  const notes = [`${layout.n_pods} 個 DSX POD（${fmt(layout.n_pods * 7)} 櫃）、IT 銘牌 ${fmt(layout.it_mw, 1)} MW、基地 ${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m（${fmt(layout.area_ha, 2)} ha）${layout.n_blocks > 1 ? `、${layout.n_blocks} 個區塊` : ''}`,
+    '機櫃以 GB300 規格代理 Vera Rubin NVL72；結果為篩選等級（逐時穩態模型＋經驗再循環與熱島）。'];
+  $('#sumNotes').innerHTML = '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>';
+}
+
+function chartOpts(extra) {
+  Chart.defaults.color = css('--muted'); Chart.defaults.borderColor = '#2c2e31'; Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  return Object.assign({ responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } } }, extra || {});
+}
+function make(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new Chart($('#' + id), cfg); }
+
+function yearChart(all) {
+  const ys = Object.keys(all[state.cooling].years).sort();
+  const col = { dry_only: css('--s1'), dry_plus_chiller: css('--s2'), evaporative: css('--s3') };
+  make('yearChart', { type: 'line', data: { labels: ys, datasets: Object.keys(COOL).filter(c => all[c]).map(c => ({ label: COOL[c], data: ys.map(y => all[c].years[y]),
+      borderColor: col[c], backgroundColor: col[c], borderWidth: c === state.cooling ? 2.5 : 1.2, pointRadius: c === state.cooling ? 2.5 : 0, tension: .25 })) },
+    options: chartOpts({ plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 10, boxHeight: 10 } } }, scales: { y: { title: { display: true, text: 'PUE' } }, x: { grid: { display: false } } } }) });
+}
+
+function mixChart(m) {
+  const lab = { dry_cooler_mwh: '乾冷卻器風扇', pumps_mwh: '泵', chiller_mwh: '冰水機', air_fan_mwh: '氣側風扇', air_dx_mwh: '氣側機械冷卻', ups_loss_mwh: 'UPS 與配電損失' };
+  const keys = Object.keys(lab);
+  make('mixChart', { type: 'bar', data: { labels: keys.map(k => lab[k]), datasets: [{ data: keys.map(k => m.mix[k] || 0), backgroundColor: css('--s1'), borderRadius: 4, maxBarThickness: 22 }] },
+    options: chartOpts({ indexAxis: 'y', scales: { x: { title: { display: true, text: 'MWh / 年' } }, y: { grid: { display: false } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${fmt(c.parsed.x)} MWh/年` } } } }) });
+}
+
+function cmpTable(all, reco) {
+  $('#cmpTable').innerHTML = `<table><thead><tr><th>策略</th><th>PUE</th><th>排不掉熱 h</th><th>冰水機 MWh</th><th>用水 m³</th></tr></thead><tbody>` +
+    Object.keys(COOL).filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${COOL[c]}${c === reco.c ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table><p class="hint">★ 推薦：' + reco.why + '</p>';
+}
+
+function climCharts() {
+  const c = CLIM[state.site], m = c.monthly, lab = m.map(x => x.month + '月');
+  make('climT', { type: 'line', data: { labels: lab, datasets: [
+    { label: '絕對最高', data: m.map(x => x.t_abs_max), borderColor: css('--s2'), borderDash: [4, 3], borderWidth: 1, pointRadius: 0 },
+    { label: '日最高平均', data: m.map(x => x.t_max_mean), borderColor: css('--s2'), backgroundColor: 'rgba(217,89,38,.16)', fill: '+1', borderWidth: 2, pointRadius: 0, tension: .3 },
+    { label: '日最低平均', data: m.map(x => x.t_min_mean), borderColor: css('--s1'), borderWidth: 2, pointRadius: 0, tension: .3 },
+    { label: '絕對最低', data: m.map(x => x.t_abs_min), borderColor: css('--s1'), borderDash: [4, 3], borderWidth: 1, pointRadius: 0 }] },
+    options: chartOpts({ plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 10, boxHeight: 2, font: { size: 11 } } } }, scales: { y: { title: { display: true, text: '°C' } }, x: { grid: { display: false } } } }) });
+  make('climP', { type: 'bar', data: { labels: lab, datasets: [{ label: '降水 mm', data: m.map(x => x.precip_mm), backgroundColor: css('--s3'), borderRadius: 3, maxBarThickness: 16 }] },
+    options: chartOpts({ scales: { y: { title: { display: true, text: '降水 mm／月' } }, x: { grid: { display: false } } } }) });
+  const e = c.extremes, h = c.hours_per_year;
+  $('#climFacts').innerHTML = [['柯本', `${c.koppen} ${c.koppen_name}`], ['ASHRAE 169', c.ashrae], ['年降水', `${fmt(c.map_mm)} mm`], ['平均 RH', `${e.rh_mean}%`],
+    ['99.6% 設計高溫', `${e.t_p99_6} °C`], ['濕球最高', `${e.twb_max} °C`], ['> 35 °C', `${fmt(h.above_35)} h／年`], ['純乾冷極限（45 °C 供水）', `${fmt(c.dry_cooler_limit_hours.t45)} h／年`]]
+    .map(([k, v]) => `<div><span>${k}</span><br>${v}</div>`).join('');
+}
+
+// ---------------------------------------------------------------- 主更新
+function update() {
+  store.set('state', state);
+  layout = state.sizeMode === 'mw' ? plan({ mw: state.mw }) : plan({ siteL: state.siteL, siteW: state.siteW });
+  const key = `${layout.mode}:${layout.n_pods}:${layout.site_m}`;
+  if (key !== lastPods) { scene.setLayout(layout); scene.frame(); lastPods = key; }
+  $('#sizeFacts').innerHTML = [['DSX POD', `${fmt(layout.n_pods)} 個（${fmt(layout.n_pods * 7)} 櫃）`], ['IT 銘牌', `${fmt(layout.it_mw, 1)} MW`], ['基地', `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
+    ['面積', `${fmt(layout.area_ha, 2)} ha`], ['區塊', layout.n_blocks > 1 ? `${layout.n_blocks} 個（每塊 ≤ 50 MW）` : '單一陣列']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  $('#sizeWarn').textContent = layout.warnings.join('；');
+  const all = {}; for (const c of Object.keys(COOL)) all[c] = interp(state.site, c, state.supply, layout.it_mw);
+  const m = all[state.cooling]; if (!m) return;
+  const reco = recommend(state.site, state.supply, layout.it_mw);
+  $('#reco').innerHTML = `推薦：<b>${COOL[reco.c]}</b>。${reco.why}。`;
+  const site = CLIM[state.site];
+  $('#summaryChip').textContent = `${site.name.replace(/（.*）/, '')}（${site.koppen}）・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${COOL[state.cooling]}・${SUP[state.supply]}・PUE ${fmt(m.pue_mean, 3)}`;
+  kpis(m); yearChart(all); mixChart(m); cmpTable(all, reco); climCharts();
+}
+
+// ---------------------------------------------------------------- 分頁、收合、顯示、提示、匯出
+function tabs(root) { $$(`${root} .tab`).forEach(t => t.onclick = () => { $$(`${root} .tab`).forEach(x => x.classList.toggle('active', x === t)); $$(`${root} .tabpane`).forEach(p => p.classList.toggle('active', p.dataset.pane === t.dataset.tab)); Object.values(charts).forEach(c => c.resize()); }); }
+$('#navCollapse').onclick = () => { $('#nav').classList.toggle('collapsed'); $('#navCollapse').textContent = $('#nav').classList.contains('collapsed') ? '›' : '‹'; };
+['vShell', 'vCool', 'vRack'].forEach(id => $('#' + id).onchange = () => scene.setVisible({ shell: $('#vShell').checked, cooler: $('#vCool').checked, rack: $('#vRack').checked }));
+
+let tipTimer;
+addEventListener('pointermove', e => {
+  if (e.target !== $('#scene')) { $('#tip').hidden = true; return; }
+  clearTimeout(tipTimer); tipTimer = setTimeout(() => {
+    const p = scene.pick(e.clientX, e.clientY); const tip = $('#tip');
+    if (!p) { tip.hidden = true; return; }
+    tip.innerHTML = `<b>POD ${p.index + 1}</b>${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}<br>7 櫃（GB300 代理）・液冷 + 疊放乾冷卻器模組<br>位置 (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) m`;
+    tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 280) + 'px'; tip.style.top = Math.min(e.clientY + 14, innerHeight - 90) + 'px';
+  }, 40);
+});
+
+async function checkApi() {
+  try { const r = await fetch('api/health', { cache: 'no-store' }); apiOK = r.ok; } catch { apiOK = false; }
+  $('#exportBtn').disabled = !apiOK;
+  $('#exportHint').textContent = apiOK ? 'zip：USD（pod.usda／campus.usda、結果層、檢查層、資產）＋ results.json／CSV＋ params.json。用 USD Composer 開。' : '匯出需要後端：本機執行 .venv\\Scripts\\python.exe -m dsxpod.server（部署版走 /api/export 函式）。';
+}
+$('#exportBtn').onclick = async () => {
+  const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = '產生中…（約 3–10 秒）';
+  try {
+    const body = { site: state.site, cooling: state.cooling, supply: state.supply, ...(state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
+    const r = await fetch('api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob(); const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'dsx_pod_export.zip';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    $('#exportHint').textContent = `已下載 ${name}（${fmt(blob.size / 1024)} KB）`;
+  } catch (e) { $('#exportHint').textContent = '匯出失敗：' + e.message; }
+  btn.textContent = old; btn.disabled = !apiOK;
+};
+
+// ---------------------------------------------------------------- 啟動
+(async function main() {
+  [CLIM, GRID] = await Promise.all([fetch('data/climate_summary.json').then(r => r.json()), fetch('data/results_grid.json').then(r => r.json())]);
+  scene = new PodScene($('#scene')); await scene.load();
+  tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply');
+  update(); scene.frame();
+  if (Q.get('tab')) $(`#data .tab[data-tab="${Q.get('tab')}"]`)?.click();
+  if (Q.get('nav')) $(`#nav .tab[data-tab="${Q.get('nav')}"]`)?.click();
+  if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
+  scene.start(lod => { $('#lodBadge').textContent = lod === 'detail' ? '細節' : '遠景方塊'; });
+  $('#loading').classList.add('done'); checkApi();
+})();

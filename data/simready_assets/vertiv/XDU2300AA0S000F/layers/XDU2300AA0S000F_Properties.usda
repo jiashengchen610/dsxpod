@@ -1,0 +1,307 @@
+#usda 1.0
+(
+    defaultPrim = "XDU2300AA0S000F"
+)
+
+over "XDU2300AA0S000F"
+{
+    custom string aif:core:accessibilityRequirement = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Service clearance in mm [AIF-MANAGED]"
+    )
+    custom string aif:core:AIFElectrical = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "[AIF-MANAGED]"
+    )
+    custom string aif:core:AIFThermal = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "[AIF-MANAGED]"
+    )
+    custom string aif:core:assetClass = "CDU" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Class of AI Factory Equipment [AIF-MANAGED]"
+    )
+    custom string aif:core:assetCreationDate = "2026-09-17" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Creation Date of Revision of Asset ISO 8601 format (YYYY-MM-DD) [AIF-MANAGED]"
+    )
+    custom string aif:core:assetDescription = "Vertiv CoolChip CDU 2300, a 2,300 kW liquid-to-liquid coolant distribution unit for direct-to-chip high-density deployments." (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Human Readable Description of Asset [AIF-MANAGED]"
+    )
+    custom string aif:core:assetValidatorVersion = "1.18.0" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Asset Validator version [AIF-MANAGED]"
+    )
+    custom string aif:core:assetVersion = "0.1" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Design Revision of Digital Twin Asset [AIF-MANAGED]"
+    )
+    custom string aif:core:connectsToModelDocumentation = "https://www.vertiv.com/4a480e/globalassets/shared/vertiv-coolchipcdu-2300kw-_datasheet_global-english_sl-80607.pdf" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Product documentation URL [AIF-MANAGED]"
+    )
+    custom int aif:core:depth = 1200 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Overall depth in mm [AIF-MANAGED]"
+    )
+    custom int aif:core:dryWeight = 1971 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Dry weight in kilograms [AIF-MANAGED]"
+    )
+    custom string aif:core:geometryMPV = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "[AIF-MANAGED]"
+    )
+    custom int aif:core:height = 2400 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Overall height in mm [AIF-MANAGED]"
+    )
+    custom string aif:core:installationClearance = "" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Installation Clearance in mm [AIF-MANAGED]"
+    )
+    custom string aif:core:manufacturer = "Vertiv" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment manufacturer name [AIF-MANAGED]"
+    )
+    custom string aif:core:modelNumber = "XDU2300AA0S000F" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Equipment model number [AIF-MANAGED]"
+    )
+    custom int aif:core:opreationalWeight = 1563 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Opreational weight in kilograms [AIF-MANAGED]"
+    )
+    custom uniform float3 aif:core:overallGeometryDimensions = (1200, 1200, 2400) (
+        doc = "Overall Geometry (WxDxH) (metric) [AIF-MANAGED]"
+    )
+    custom string aif:core:sceneOptimizerVersion = "110.1.0" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Scene Optimizer version [AIF-MANAGED]"
+    )
+    custom string aif:core:simreadyVersion = "0.2.0" (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "SimReady version [AIF-MANAGED]"
+    )
+    custom int aif:core:weight = 1793 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Wet weight in kg [AIF-MANAGED]"
+    )
+    custom int aif:core:width = 1200 (
+        customData = {
+            dictionary omni = {
+                dictionary kit = {
+                    bool locked = 1
+                }
+            }
+        }
+        doc = "Overall width in mm [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:auxiliaryPowerSourceAndConnections = ""
+    custom uniform string aif:spec:breaker = ""
+    custom uniform string aif:spec:communication1 = "Modbus, SNMPv2/3, HTTPS, SSH, SFTP, BACnet, NTP" (
+        doc = "Communication protocols [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:communication2 = ""
+    custom uniform string aif:spec:controlHmi = ""
+    custom uniform string aif:spec:controlWiresForExternalComm = ""
+    custom uniform string aif:spec:coolingCapacityCurve = ""
+    custom uniform string aif:spec:coolingType = "Liquid-to-liquid" (
+        doc = "Cooling method [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:current = ""
+    custom uniform string aif:spec:disconnect = ""
+    custom uniform string aif:spec:efficiency = ""
+    custom uniform string aif:spec:efficiencyRotatingEquipment = ""
+    custom uniform string aif:spec:filterSizeCoolingCapacity = ""
+    custom uniform string aif:spec:filterSizePumps = ""
+    custom uniform int aif:spec:frequency = 60 (
+        doc = "Input frequency in Hz from model code [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:fuse = ""
+    custom uniform string aif:spec:fwsReturnPipingConnection = ""
+    custom uniform string aif:spec:fwsSupplyPipingConnection = ""
+    custom uniform string aif:spec:incomingPowerFeeds = "Single feed; model code specifies no ATS" (
+        doc = "Incoming power-feed configuration [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:maximumCoolingCapacity = ""
+    custom uniform string aif:spec:maximumFlow = ""
+    custom uniform string aif:spec:maximumPowerConsumption2XPumps = ""
+    custom uniform string aif:spec:maximumPowerConsumption3XPumps = ""
+    custom uniform string aif:spec:maxSpeed = ""
+    custom uniform string aif:spec:motorPowerInfo = ""
+    custom uniform string aif:spec:motorSize = ""
+    custom uniform string aif:spec:mountStyle = "Floor-mounted, in-row" (
+        doc = "Mounting style [AIF-MANAGED]"
+    )
+    custom uniform int aif:spec:nominalCoolingCapacity = 2300 (
+        doc = "Nominal cooling capacity in kW at 4°C ATD [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:nominalFlow = ""
+    custom uniform int aif:spec:nominalVoltage = 480 (
+        doc = "Nominal input voltage from model code [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:numberOfPumps = ""
+    custom uniform string aif:spec:powerFactor = ""
+    custom uniform string aif:spec:powerFactorRotatingEquipment = ""
+    custom uniform float aif:spec:powerRating = 47.8 (
+        doc = "Published maximum power consumption in kW [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:powerTransferDesign = "No ATS" (
+        doc = "Power-transfer design [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:powerTransferDevice = "None" (
+        doc = "Model code specifies no ATS [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:primaryCircuitVolume = ""
+    custom uniform string aif:spec:primaryFiltration = ""
+    custom uniform string aif:spec:pumpFlowCurve = ""
+    custom uniform string aif:spec:pumpRedundancyStrategyCoolingCapacity = ""
+    custom uniform string aif:spec:pumpRedundancyStrategyPumps = ""
+    custom uniform string aif:spec:ratedCableSize = ""
+    custom uniform string aif:spec:ratedHp = ""
+    custom uniform float aif:spec:ratedMaxPower = 47.8 (
+        doc = "Published maximum power consumption in kW [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:ratedSpeed = ""
+    custom uniform string aif:spec:ratedVoltageIncomingPower = ""
+    custom uniform string aif:spec:ratedVoltageRotatingEquipment = ""
+    custom uniform string aif:spec:redundancyScheme = ""
+    custom uniform string aif:spec:referenceFacilityCoolantTemperature = ""
+    custom uniform string aif:spec:referenceSecondaryCoolantTemperature = ""
+    custom uniform string aif:spec:referenceTechnologyCoolantFlowRate = ""
+    custom uniform string aif:spec:secondaryCircuitVolume = ""
+    custom uniform string aif:spec:secondaryFiltration = ""
+    custom uniform string aif:spec:tcsReturnPipingConnection = ""
+    custom uniform string aif:spec:tcsSupplyPipingConnection = ""
+    custom uniform string aif:spec:totalHeatDissipated = ""
+    custom uniform string aif:spec:wettedMaterialFws = ""
+    custom uniform string aif:spec:wettedMaterialTcs = ""
+    custom uniform string aif:spec:wiringMethod = ""
+    custom uniform string aif:spec:workingFluidCoolingCapacity = "Chilled water or glycol mixture; treated water or propylene glycol mix" (
+        doc = "Working fluids [AIF-MANAGED]"
+    )
+    custom uniform string aif:spec:workingFluidPumps = ""
+}
+

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSX POD 場址模擬</title>
+<link rel="stylesheet" href="css/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="loading" class="loading">載入模型與資料…</div>
+
+<header class="brand panel">
+  <div class="brand-title">DSX POD 場址模擬</div>
+  <div class="brand-sub" id="summaryChip">—</div>
+</header>
+
+<!-- 左：浮動導覽 -->
+<nav class="nav panel" id="nav" aria-label="設定">
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-tab="site" role="tab">① 場址</button>
+    <button class="tab" data-tab="size" role="tab">② 規模</button>
+    <button class="tab" data-tab="cool" role="tab">③ 散熱</button>
+    <button class="collapse" id="navCollapse" title="收合">‹</button>
+  </div>
+  <section class="tabpane active" data-pane="site">
+    <p class="hint">選一個氣候帶。卡片顯示逐月日最高 / 日最低氣溫帶與柯本分類。</p>
+    <div class="sites" id="siteCards"></div>
+  </section>
+  <section class="tabpane" data-pane="size">
+    <div class="seg" id="sizeMode">
+      <button class="on" data-mode="mw">總電量</button><button data-mode="site">基地範圍</button>
+    </div>
+    <div id="sizeMW">
+      <label class="field">IT 銘牌容量 <output id="mwOut">10 MW</output></label>
+      <input type="range" id="mwRange" min="0" max="1000" step="1" value="333">
+      <div class="ticks"><span>1</span><span>10</span><span>100</span><span>1000 MW</span></div>
+      <label class="field small">精確輸入 <input type="number" id="mwInput" min="0.5" max="1000" step="0.5" value="10"> MW</label>
+    </div>
+    <div id="sizeSite" hidden>
+      <label class="field">基地長 <output id="slOut">120 m</output></label>
+      <input type="range" id="slRange" min="30" max="1500" step="10" value="120">
+      <label class="field">基地寬 <output id="swOut">100 m</output></label>
+      <input type="range" id="swRange" min="30" max="1500" step="10" value="100">
+    </div>
+    <dl class="facts" id="sizeFacts"></dl>
+    <div class="warn" id="sizeWarn"></div>
+  </section>
+  <section class="tabpane" data-pane="cool">
+    <label class="field">散熱策略</label>
+    <div class="seg col" id="coolSeg">
+      <button data-v="dry_only" class="on">純乾冷卻器<small>零用水；熱天可能排不掉</small></button>
+      <button data-v="dry_plus_chiller">乾冷卻器＋輔助冰水機<small>補足熱天；多耗電</small></button>
+      <button data-v="evaporative">蒸發式（絕熱）<small>熱天噴水；耗水</small></button>
+    </div>
+    <label class="field">供水溫度</label>
+    <div class="seg" id="supplySeg">
+      <button data-v="t45" class="on">45 °C（DSX）</button><button data-v="t32">32 °C（W32）</button>
+    </div>
+    <div class="reco" id="reco"></div>
+  </section>
+</nav>
+
+<!-- 右：資料分頁 -->
+<aside class="data panel" id="data" aria-label="結果">
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-tab="sum">摘要</button>
+    <button class="tab" data-tab="year">逐年</button>
+    <button class="tab" data-tab="mix">組成</button>
+    <button class="tab" data-tab="cmp">比較</button>
+    <button class="tab" data-tab="clim">氣候</button>
+  </div>
+  <section class="tabpane active" data-pane="sum"><div class="kpis" id="kpis"></div><div class="notes" id="sumNotes"></div></section>
+  <section class="tabpane" data-pane="year"><div class="chart"><canvas id="yearChart"></canvas></div><p class="hint">20 年（2005–2024，ERA5）每年的 PUE。年際差遠小於場址與散熱策略的差。</p></section>
+  <section class="tabpane" data-pane="mix"><div class="chart"><canvas id="mixChart"></canvas></div><p class="hint">一年的設施耗電組成（不含 IT）。</p></section>
+  <section class="tabpane" data-pane="cmp"><div id="cmpTable"></div><p class="hint">同場址、同規模、同供水溫度下三種散熱策略。⚠ 表示每年有排不掉熱的小時，PUE 不可直接採信。</p></section>
+  <section class="tabpane" data-pane="clim"><div class="chart short"><canvas id="climT"></canvas></div><div class="chart short"><canvas id="climP"></canvas></div><div id="climFacts" class="facts-grid"></div></section>
+  <footer class="export">
+    <button id="exportBtn" class="primary">匯出 USD 與參數（zip）</button>
+    <div class="hint" id="exportHint"></div>
+  </footer>
+</aside>
+
+<!-- 左下：顯示切換 -->
+<div class="view panel">
+  <label><input type="checkbox" id="vShell" checked> 貨櫃殼</label>
+  <label><input type="checkbox" id="vCool" checked> 散熱模組</label>
+  <label><input type="checkbox" id="vRack"> 內部機櫃</label>
+  <span class="lod" id="lodBadge">細節</span>
+</div>
+<div class="tip panel" id="tip" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
