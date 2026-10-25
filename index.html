@@ -12,6 +12,7 @@
 <canvas id="scene"></canvas>
 <div id="loading" class="loading">載入模型與資料…</div>
 
+<button class="menu-btn panel" id="menuBtn" aria-label="設定選單">☰</button>
 <header class="brand panel">
   <div class="brand-title">DSX POD 場址模擬</div>
   <div class="brand-sub" id="summaryChip">—</div>
@@ -49,22 +50,37 @@
     <div class="warn" id="sizeWarn"></div>
   </section>
   <section class="tabpane" data-pane="cool">
-    <label class="field">散熱策略</label>
+    <label class="field">建議設定（一鍵最佳化）</label>
+    <div class="seg col preset" id="presetSeg">
+      <button data-p="energy">⚡ 最省電<small id="pEnergy">—</small></button>
+      <button data-p="water">💧 最省水<small id="pWater">—</small></button>
+    </div>
+    <p class="hint">只在「全年每小時都排得掉熱」的組合裡挑（最省電：耗電差 0.5% 以內時選用水少的）。改場址或規模會自動重算；自己點下面的選項就變成自訂。</p>
+    <label class="field">自訂：散熱策略</label>
     <div class="seg col" id="coolSeg">
       <button data-v="dry_only" class="on">純乾冷卻器<small>零用水；熱天可能排不掉</small></button>
       <button data-v="dry_plus_chiller">乾冷卻器＋輔助冰水機<small>補足熱天；多耗電</small></button>
       <button data-v="evaporative">蒸發式（絕熱）<small>熱天噴水；耗水</small></button>
     </div>
-    <label class="field">供水溫度</label>
+    <label class="field">自訂：供水溫度</label>
     <div class="seg" id="supplySeg">
       <button data-v="t45" class="on">45 °C（DSX）</button><button data-v="t32">32 °C（W32）</button>
     </div>
-    <div class="reco" id="reco"></div>
+    <div class="reco" id="reco" hidden></div>
   </section>
+  <footer class="navfoot">
+    <span>畫質</span>
+    <div class="seg mini" id="qualitySeg"><button data-q="high">高</button><button data-q="lite">輕量</button></div>
+    <span class="hint" id="qualityHint"></span>
+  </footer>
 </nav>
 
 <!-- 右：資料分頁 -->
 <aside class="data panel" id="data" aria-label="結果">
+  <div class="sheet-head" id="sheetHead" role="button" aria-label="展開報告">
+    <div class="grab"></div>
+    <div class="kstrip" id="kpiStrip"></div>
+  </div>
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="sum">摘要</button>
     <button class="tab" data-tab="year">逐年</button>

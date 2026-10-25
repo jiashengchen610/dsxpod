@@ -15,7 +15,8 @@ const SVC_W = 6, PUB_W = 8, GATE = 4.5;                         // 廠內道路�
 const ROAD_LEN = 6000;                                          // 廠外公路往東西兩側各延伸到霧裡
 const PUB_Z = SETBACK + 9;                                      // 廠外公路中心（three z）：南側圍籬外 9 m
 const RACKS = Array.from({ length: 7 }, (_, i) => [2.5 + i * 0.6, 0.06]);   // 與 dsxpod/usd_out.rack_positions 一致
-const DETAIL_DIST = 260;                                        // 鏡頭距離 > 這個 → 方塊
+const DETAIL_DIST = { high: 260, lite: 140 };                   // 鏡頭距離 > 這個 → 方塊（輕量畫質提早切）
+const ALWAYS_DETAIL = { high: 56, lite: 24 };                   // POD 數不超過這個時，不論遠近都畫細節模型
 const ACCENT = 0x76b900;
 const subScale = s => Math.max(0.4, Math.min(1, s.l / 40));     // 小陣列：變電站等比縮小（接近箱式變電站的量體）
 
@@ -142,19 +143,21 @@ function vegKinds(veg) {
 }
 
 export class PodScene {
-  constructor(canvas) {
-    this.canvas = canvas;
-    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', logarithmicDepthBuffer: false });
-    r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.setSize(innerWidth, innerHeight);
-    r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; r.outputColorSpace = THREE.SRGBColorSpace;
+  // 畫質：high = 陰影、天空 shader + 環境光、PBR 材質、完整植被；lite（輕量）= 無陰影、純色天空、Lambert 材質、植被 1/3、像素密度 1、提早換方塊。
+  // 兩種都「按需渲染」：鏡頭沒動、資料沒變就不重畫（手機省電、筆電不發燙）。
+  constructor(canvas, { quality = 'high', autoDowngrade = false } = {}) {
+    this.canvas = canvas; this.quality = quality; this.autoDowngrade = autoDowngrade; this.dirty = true; this.onQualityChange = null;
+    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'high', powerPreference: quality === 'high' ? 'high-performance' : 'low-power' });
+    r.setPixelRatio(this._dpr()); r.setSize(innerWidth, innerHeight);
+    r.shadowMap.enabled = quality === 'high'; r.shadowMap.type = THREE.PCFSoftShadowMap; r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 0.62;
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0xbfcad0); this.scene.fog = new THREE.Fog(0xbfcad0, 800, 4000);
     this.camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.5, 9000);
     this.controls = new OrbitControls(this.camera, canvas); this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.47;
-    this.hemi = new THREE.HemisphereLight(0xdfe8ff, 0x4a4a3a, 0.55); this.scene.add(this.hemi);
-    const sun = this.sun = new THREE.DirectionalLight(0xfff4e5, 3.2); sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096); sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.02;
+    this.hemi = new THREE.HemisphereLight(0xdfe8ff, 0x4a4a3a, quality === 'high' ? 0.55 : 1.15); this.scene.add(this.hemi);
+    const sun = this.sun = new THREE.DirectionalLight(0xfff4e5, 3.2); sun.castShadow = quality === 'high'; sun.shadow.mapSize.set(4096, 4096); sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.02;
     this.scene.add(sun); this.scene.add(sun.target);
-    this.sky = new Sky(); this.sky.scale.setScalar(8000); this.scene.add(this.sky);
+    this.sky = new Sky(); this.sky.scale.setScalar(8000); this.sky.visible = quality === 'high'; this.scene.add(this.sky);
     this.pmrem = new THREE.PMREMGenerator(r);
     this.groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
     this.groundMat.vertexColors = true;
@@ -173,7 +176,34 @@ export class PodScene {
     this.highlight = new THREE.Box3Helper(new THREE.Box3(), ACCENT); this.highlight.visible = false; this.scene.add(this.highlight);
     this.subParts = substationTemplate(); this.subSets = []; this.subHit = null;
     this.gravelTex = noiseTex(['#8e8f89', '#7f807a', '#a0a19a', '#727470'], { blobs: 500, rMin: 2, rMax: 10, speck: 16000, seed: 3 });
-    addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); r.setSize(innerWidth, innerHeight); });
+    addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); r.setSize(innerWidth, innerHeight); this.dirty = true; });
+    this.controls.addEventListener('change', () => { this.dirty = true; });
+  }
+
+  // 遠景方塊 / 機櫃材質：高畫質 PBR，輕量 Lambert（沒有環境光時 PBR 金屬感會發黑）
+  _boxMat(kind) {
+    this._boxMats ||= {
+      high: { shell: new THREE.MeshStandardMaterial({ color: 0xc9cbca, roughness: 0.7, metalness: 0.2 }), cool: new THREE.MeshStandardMaterial({ color: 0x8c9096, roughness: 0.6, metalness: 0.4 }), rack: new THREE.MeshStandardMaterial({ color: 0x1c1c1f, roughness: 0.5, metalness: 0.6 }) },
+      lite: { shell: new THREE.MeshLambertMaterial({ color: 0xd4d6d4 }), cool: new THREE.MeshLambertMaterial({ color: 0x9a9fa5 }), rack: new THREE.MeshLambertMaterial({ color: 0x2a2a2e }) },
+    };
+    return this._boxMats[this.quality][kind];
+  }
+
+  _dpr() { return this.quality === 'high' ? Math.min(devicePixelRatio, 2) : Math.min(devicePixelRatio, 1); }
+
+  // 執行中切換畫質（抗鋸齒在建立時決定，其餘都可即時切）
+  setQuality(q, why = null) {
+    if (q === this.quality) return;
+    this.quality = q; const hi = q === 'high';
+    this.renderer.setPixelRatio(this._dpr()); this.renderer.shadowMap.enabled = hi; this.sun.castShadow = hi;
+    this.sky.visible = hi; this.hemi.intensity = hi ? 0.55 : 1.15;
+    if (hi && this.envDirty) this._bakeEnv();
+    this.scene.environment = hi && this.envRT ? this.envRT.texture : null;
+    for (const [k, parts] of [['shell', this.shellParts], ['cooler', this.coolerParts]]) (this.sets[k] || []).forEach((m, i) => { m.material = hi ? parts[i].mat : parts[i].lite; });
+    if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.rack[0].material = this._boxMat('rack'); }
+    this.scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
+    this.lod = null; this.updateLod(); this._buildSurroundings(); this.dirty = true;
+    this.onQualityChange && this.onQualityChange(q, why);
   }
 
   async load(base = 'assets/') {
@@ -181,7 +211,9 @@ export class PodScene {
     const grab = async (f, dy = 0) => {
       const g = await loader.loadAsync(base + f); const parts = [];
       g.scene.updateMatrixWorld(true);
-      g.scene.traverse(o => { if (o.isMesh) { const geo = o.geometry.clone(); geo.applyMatrix4(o.matrixWorld); if (dy) geo.translate(0, dy, 0); const m = o.material.clone(); m.side = THREE.DoubleSide; parts.push({ geo, mat: m }); } });
+      g.scene.traverse(o => { if (o.isMesh) { const geo = o.geometry.clone(); geo.applyMatrix4(o.matrixWorld); if (dy) geo.translate(0, dy, 0); const m = o.material.clone(); m.side = THREE.DoubleSide;
+        const lite = new THREE.MeshLambertMaterial({ color: m.color, map: m.map || null, side: THREE.DoubleSide, vertexColors: m.vertexColors, flatShading: m.flatShading });   // GLB 沒有法線 → GLTFLoader 開了 flatShading，要一起帶
+        parts.push({ geo, mat: m, lite }); } });
       return parts;
     };
     // 散熱模組 GLB 以自身底面為 0；疊放在貨櫃頂上 → 墊高一個貨櫃高（USD 端是 Reference 的 translate，同一個數）
@@ -195,11 +227,11 @@ export class PodScene {
     for (const s of Object.values(this.sets)) s.forEach(m => { this.scene.remove(m); m.dispose(); });
     const mk = (geo, mat, c) => { const m = new THREE.InstancedMesh(geo, mat, c); m.castShadow = m.receiveShadow = true; m.count = 0; m.frustumCulled = false; this.scene.add(m); return m; };
     this.sets = {
-      shell: this.shellParts.map(p => mk(p.geo, p.mat, cap)),
-      cooler: this.coolerParts.map(p => mk(p.geo, p.mat, cap)),
-      boxShell: [mk(this.boxShellGeo, new THREE.MeshStandardMaterial({ color: 0xc9cbca, roughness: 0.7, metalness: 0.2 }), cap)],
-      boxCool: [mk(this.boxCoolGeo, new THREE.MeshStandardMaterial({ color: 0x8c9096, roughness: 0.6, metalness: 0.4 }), cap)],
-      rack: [mk(this.rackGeo, new THREE.MeshStandardMaterial({ color: 0x1c1c1f, roughness: 0.5, metalness: 0.6 }), cap * 7)],
+      shell: this.shellParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
+      cooler: this.coolerParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
+      boxShell: [mk(this.boxShellGeo, this._boxMat('shell'), cap)],
+      boxCool: [mk(this.boxCoolGeo, this._boxMat('cool'), cap)],
+      rack: [mk(this.rackGeo, this._boxMat('rack'), cap * 7)],
     };
     this.picker = this.sets.boxShell[0];
     this.cap = cap;
@@ -225,7 +257,7 @@ export class PodScene {
     this._placeSun();
     this._buildSurroundings();
     this.highlight.visible = false;
-    this._applyVis();
+    this._applyVis(); this.dirty = true;
   }
 
   // 基地鋪面（礫石）+ 區塊混凝土基座
@@ -304,15 +336,22 @@ export class PodScene {
     this.sunDir = new THREE.Vector3(E, U, -N).normalize();
     const u = this.sky.material.uniforms;
     u.turbidity.value = e.turbidity; u.rayleigh.value = e.rayleigh; u.mieCoefficient.value = 0.005; u.mieDirectionalG.value = 0.8; u.sunPosition.value.copy(this.sunDir);
-    // 環境光：用同一個天空烘 PMREM
-    const envScene = new THREE.Scene(); const sky2 = new Sky(); sky2.scale.setScalar(1000); Object.entries(u).forEach(([k, v]) => sky2.material.uniforms[k].value = v.value.clone ? v.value.clone() : v.value); envScene.add(sky2);
-    this.envRT?.dispose(); this.envRT = this.pmrem.fromScene(envScene); this.scene.environment = this.envRT.texture;
+    // 環境光：用同一個天空烘 PMREM（只有高畫質需要；省電畫質等切回高畫質再烘）
+    this.envDirty = true; if (this.quality === 'high') this._bakeEnv(); else this.scene.environment = null;
     const fog = new THREE.Color(e.fog); this.scene.fog.color.copy(fog); this.scene.background = fog;
     this.hemi.color.set(e.fog); this.hemi.groundColor.set(e.ground[0]);
     this.sun.color.set(this.lat > 45 ? 0xffe9d0 : 0xfff6ea);
     const gt = noiseTex(e.ground, { seed: 11, rows: e.paddy ? 8 : 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
     this.groundMat.map?.dispose(); this.groundMat.map = gt; this.groundMat.needsUpdate = true;
     if (rebuild && this.layout) { this._placeSun(); this._roads(this.layout); this._buildSurroundings(); }
+    this.dirty = true;
+  }
+
+  _bakeEnv() {
+    const u = this.sky.material.uniforms;
+    const envScene = new THREE.Scene(); const sky2 = new Sky(); sky2.scale.setScalar(1000); Object.entries(u).forEach(([k, v]) => sky2.material.uniforms[k].value = v.value.clone ? v.value.clone() : v.value); envScene.add(sky2);
+    this.envRT?.dispose(); this.envRT = this.pmrem.fromScene(envScene); this.scene.environment = this.envRT.texture; this.envDirty = false;
+    sky2.geometry.dispose(); sky2.material.dispose();
   }
 
   _placeSun() {
@@ -351,7 +390,8 @@ export class PodScene {
     }
     // 2) 外圈群落
     const area = (2 * R) ** 2 - (span + 2 * margin) ** 2;
-    const N = Math.min(4200, Math.max(200, Math.round(e.density * area / 700)));
+    const lite = this.quality === 'lite';
+    const N = Math.min(lite ? 1200 : 4200, Math.max(lite ? 80 : 200, Math.round(e.density * area / 700 * (lite ? 0.33 : 1))));
     for (let i = 0, tries = 0; i < N && tries < N * 8; tries++) {
       const x = cx + (r() * 2 - 1) * R, z = cz + (r() * 2 - 1) * R;
       if (inSite(x, z, margin + 10)) continue;
@@ -474,11 +514,14 @@ export class PodScene {
   frame() {
     const { sx, sy, cx, cy } = this._view(); const span = Math.max(sx, sy, 30);
     this.controls.target.set(cx, 0, -cy);
-    this.camera.position.set(cx - span * 0.62, span * 0.3 + 12, -cy + span * 1.05 + 22);   // 低一點的視角，看得到地平線與天空
-    this.controls.update();
+    const side = this.camera.aspect < 1 ? 0.28 : 0.62;                   // 直式螢幕用比較正面的視角，基地才放得進中間
+    this.camera.position.set(cx - span * side, span * 0.3 + 12, -cy + span * 1.05 + 22);   // 低一點的視角，看得到地平線與天空
+    const k = Math.max(1, Math.sqrt(1 / this.camera.aspect));             // 直式螢幕（手機）拉遠一點，左右才放得下
+    if (k > 1) this.camera.position.sub(this.controls.target).multiplyScalar(k).add(this.controls.target);
+    this.controls.update(); this.dirty = true;
   }
 
-  setVisible(v) { Object.assign(this.vis, v); this._applyVis(); }
+  setVisible(v) { Object.assign(this.vis, v); this._applyVis(); this.dirty = true; }
 
   _applyVis() {
     const detail = this.lod === 'detail';
@@ -491,13 +534,14 @@ export class PodScene {
 
   updateLod() {
     const d = this.camera.position.distanceTo(this.controls.target);
-    const want = d > DETAIL_DIST ? 'box' : 'detail';
+    const want = d > DETAIL_DIST[this.quality] && this.n > ALWAYS_DETAIL[this.quality] ? 'box' : 'detail';
     if (want !== this.lod) { this.lod = want; this._applyVis(); }
     return this.lod;
   }
 
   pick(clientX, clientY) {
     if (!this.picker || !this.n) return null;
+    this.dirty = true;
     const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -clientY / innerHeight * 2 + 1), this.camera);
     const hp = ray.intersectObject(this.picker, false)[0];
     const hs = this.subHit ? ray.intersectObject(this.subHit, false)[0] : null;
@@ -514,7 +558,22 @@ export class PodScene {
   }
 
   start(onFrame) {
-    const loop = () => { requestAnimationFrame(loop); this.controls.update(); this.sky.position.copy(this.camera.position); const lod = this.updateLod(); onFrame && onFrame(lod); this.renderer.render(this.scene, this.camera); };
-    loop();
+    let last = 0; const dts = [];
+    const loop = (now) => {
+      requestAnimationFrame(loop);
+      const moved = this.controls.update();
+      if (!moved && !this.dirty) { last = 0; return; }                    // 按需渲染：沒變化就不畫
+      this.dirty = false;
+      this.sky.position.copy(this.camera.position); const lod = this.updateLod(); onFrame && onFrame(lod);
+      this.renderer.render(this.scene, this.camera);
+      // 自動降級：連續互動中量 60 個影格，中位數 > 45 ms（約 < 22 fps）就切省電畫質（只做一次）
+      if (this.autoDowngrade && this.quality === 'high' && last && now - last < 250) {
+        dts.push(now - last);
+        if (dts.length >= 60) { const med = dts.sort((a, b) => a - b)[30]; dts.length = 0; this.autoDowngrade = false;
+          if (med > 45) this.setQuality('lite', `畫面約 ${Math.round(1000 / med)} fps，已自動切到輕量畫質`); }
+      }
+      last = now;
+    };
+    requestAnimationFrame(loop);
   }
 }

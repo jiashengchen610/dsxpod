@@ -15,7 +15,19 @@ const RUBIN = { gpus: 72, pf_inf: 3600, pf_train: 2500 };
 
 const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('dsxpod:' + k, JSON.stringify(v)); } catch {} } };
-const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45' }, store.get('state', {}));
+const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', preset: null }, store.get('state', {}));
+// 手機 / 窄螢幕：設定進漢堡選單、報告進底部面板
+const MQ = matchMedia('(max-width: 900px)');
+const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open'); };
+applyMobile(); MQ.addEventListener?.('change', () => { applyMobile(); setTimeout(() => { Object.values(charts).forEach(c => c.resize()); scene && scene.frame(); }, 300); });
+// 畫質：網址 q= > 使用者上次選的 > 自動（觸控 / 窄螢幕 / 記憶體或核心少 → 省電；其餘高，跑起來太慢會自動降）
+function initialQuality() {
+  const q = new URLSearchParams(location.search).get('q'); if (q === 'high' || q === 'lite') return { q, auto: false };
+  const saved = store.get('quality', null); if (saved === 'high' || saved === 'lite') return { q: saved, auto: false };
+  const weak = matchMedia('(pointer: coarse)').matches || innerWidth < 900 || (navigator.deviceMemory && navigator.deviceMemory <= 4) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
+  return { q: weak ? 'lite' : 'high', auto: true };
+}
+const QUALITY = initialQuality();
 // 網址參數可覆寫（分享 / 測試用）：?site=phoenix&mw=200&cooling=evaporative&supply=t32&tab=cmp&nav=cool
 const Q = new URLSearchParams(location.search);
 for (const k of ['site', 'cooling', 'supply']) if (Q.get(k)) state[k] = Q.get(k);
@@ -90,10 +102,43 @@ $('#slRange').oninput = e => { state.siteL = +e.target.value; sizeUI(); update()
 $('#swRange').oninput = e => { state.siteW = +e.target.value; sizeUI(); update(); };
 
 // ---------------------------------------------------------------- UI：散熱
-function segUI(id, key) { $$(`#${id} button`).forEach(b => { b.classList.toggle('on', b.dataset.v === state[key]); b.onclick = () => { state[key] = b.dataset.v; segUI(id, key); update(); }; }); }
+function segUI(id, key) { $$(`#${id} button`).forEach(b => { b.classList.toggle('on', b.dataset.v === state[key]); b.onclick = () => { state[key] = b.dataset.v; state.preset = null; segUI(id, key); update(); }; }); }
+
+// ---------------------------------------------------------------- 建議設定（一鍵最佳化）
+// 在「全年每小時都排得掉熱」的組合（3 散熱 × 2 供水）裡挑：最省電 = 設施耗電最少；最省水 = 用水最少，同水量再比耗電。
+// 沒有任何組合排得掉熱時，退而求其次挑排不掉熱小時最少的，並標示。
+function optimize(goal, itMW) {
+  const c = [];
+  for (const k of Object.keys(COOL)) for (const sp of Object.keys(SUP)) { const m = interp(state.site, k, sp, itMW); if (m) c.push({ c: k, s: sp, m }); }
+  const ok = c.filter(x => x.m.valid);
+  if (!ok.length) { const b = c.sort((a, b) => a.m.unmet_h - b.m.unmet_h)[0]; return { ...b, feasible: false }; }
+  if (goal === 'water') return { ...ok.sort((a, b) => a.m.water_m3 - b.m.water_m3 || a.m.facility_mwh - b.m.facility_mwh)[0], feasible: true };
+  // 最省電：耗電最少；但和最少者差 0.5% 以內時，選用水較少的（不為了幾乎看不出的省電去耗大量水）
+  const minE = Math.min(...ok.map(x => x.m.facility_mwh));
+  const near = ok.filter(x => x.m.facility_mwh <= minE * 1.005).sort((a, b) => a.m.water_m3 - b.m.water_m3 || a.m.facility_mwh - b.m.facility_mwh);
+  return { ...near[0], feasible: true };
+}
+function presetUI(itMW) {
+  const lab = o => `${COOL[o.c]}・${SUP[o.s]}・${fmt(o.m.facility_mwh / 1000, 1)} GWh／年・${fmt(o.m.water_m3)} m³${o.feasible ? '' : '・⚠ 仍有排熱缺口'}`;
+  const best = { energy: optimize('energy', itMW), water: optimize('water', itMW) };
+  $('#pEnergy').textContent = lab(best.energy); $('#pWater').textContent = lab(best.water);
+  $$('#presetSeg button').forEach(b => { b.classList.toggle('on', b.dataset.p === state.preset); b.onclick = () => { state.preset = b.dataset.p; update(); }; });
+  return best;
+}
 
 // ---------------------------------------------------------------- 結果
+function kpiStrip(m) {
+  const racks = layout.n_pods * 7, ef = racks * RUBIN.pf_inf / 1000;
+  $('#kpiStrip').innerHTML = [
+    [fmt(m.pue_mean, 3), m.valid ? 'PUE・全年可滿載' : 'PUE・⚠ 排熱缺口', m.valid ? 'good' : 'bad'],
+    [`${fmt(m.facility_mwh / 1000, 1)} GWh`, '設施耗電／年', ''],
+    [`${fmt(m.water_m3)} m³`, '用水／年', ''],
+    [`${fmt(ef, ef < 100 ? 1 : 0)} EF`, '算力（NVFP4）', ''],
+  ].map(([v, l, c]) => `<div class="${c}"><b>${v}</b><span>${l}</span></div>`).join('');
+}
+
 function kpis(m) {
+  kpiStrip(m);
   const pueCls = m.valid ? 'ok' : 'bad';
   const racks = layout.n_pods * 7, pfI = racks * RUBIN.pf_inf, pfT = racks * RUBIN.pf_train;
   $('#kpis').innerHTML = [
@@ -166,6 +211,8 @@ function update() {
   $('#sizeFacts').innerHTML = [['DSX POD', `${fmt(layout.n_pods)} 個（${fmt(layout.n_pods * 7)} 櫃）`], ['IT 銘牌', `${fmt(layout.it_mw, 1)} MW`], ['基地', `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
     ['面積', `${fmt(layout.area_ha, 2)} ha`], ['區塊', layout.n_blocks > 1 ? `${layout.n_blocks} 個（每塊 4 × 14 = 56 POD ≈ 53 MW，各一座變電站）` : '單一陣列']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   $('#sizeWarn').textContent = layout.warnings.join('；');
+  const best = presetUI(layout.it_mw);
+  if (state.preset && best[state.preset]) { state.cooling = best[state.preset].c; state.supply = best[state.preset].s; segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); store.set('state', state); }
   const all = {}; for (const c of Object.keys(COOL)) all[c] = interp(state.site, c, state.supply, layout.it_mw);
   const m = all[state.cooling]; if (!m) return;
   const reco = recommend(state.site, state.supply, layout.it_mw);
@@ -177,7 +224,13 @@ function update() {
 
 // ---------------------------------------------------------------- 分頁、收合、顯示、提示、匯出
 function tabs(root) { $$(`${root} .tab`).forEach(t => t.onclick = () => { $$(`${root} .tab`).forEach(x => x.classList.toggle('active', x === t)); $$(`${root} .tabpane`).forEach(p => p.classList.toggle('active', p.dataset.pane === t.dataset.tab)); Object.values(charts).forEach(c => c.resize()); }); }
-$('#navCollapse').onclick = () => { $('#nav').classList.toggle('collapsed'); $('#navCollapse').textContent = $('#nav').classList.contains('collapsed') ? '›' : '‹'; };
+$('#menuBtn').onclick = () => { document.body.classList.toggle('menu-open'); document.body.classList.remove('sheet-open'); };
+// 底部面板：點把手 / 摘要條切換，或上下滑
+const sheetToggle = (open) => { document.body.classList.toggle('sheet-open', open ?? !document.body.classList.contains('sheet-open')); if (document.body.classList.contains('sheet-open')) document.body.classList.remove('menu-open'); setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300); };
+$('#sheetHead').onclick = () => sheetToggle();
+{ let y0 = null; $('#sheetHead').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
+  $('#sheetHead').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy < 0); } }); }
+$('#navCollapse').onclick = () => { if (document.body.classList.contains('mobile')) { document.body.classList.remove('menu-open'); return; } $('#nav').classList.toggle('collapsed'); $('#navCollapse').textContent = $('#nav').classList.contains('collapsed') ? '›' : '‹'; };
 // 顯示：貨櫃殼與散熱模組全開、內部機櫃不顯示（不再提供切換）
 // 全螢幕瀏覽：收起兩側面板＋瀏覽器全螢幕；Esc、F 或按鈕還原
 function setImmersive(on) {
@@ -194,14 +247,24 @@ addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !/INP
 if (Q.get('view') === 'full') { document.body.classList.add('immersive'); $('#fsBtn').textContent = '✕ 顯示面板'; }
 
 let tipTimer;
+// 觸控：點一下（移動 < 8 px）顯示資訊，3 秒後消失
+{ let d0 = null; $('#scene').addEventListener('pointerdown', e => { d0 = [e.clientX, e.clientY]; });
+  $('#scene').addEventListener('pointerup', e => {
+    if (e.pointerType === 'mouse' || !d0 || Math.hypot(e.clientX - d0[0], e.clientY - d0[1]) > 8) return;
+    showTip(e.clientX, e.clientY); clearTimeout(tipTimer); tipTimer = setTimeout(() => { $('#tip').hidden = true; }, 3000);
+  }); }
+function showTip(x, y) {
+  const p = scene.pick(x, y); const tip = $('#tip');
+  if (!p) { tip.hidden = true; return; }
+  if (p.kind === 'sub') tip.innerHTML = `<b>變電站${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}</b><br>中壓進線 → 主變壓器 ×2 → 開關室 → 區塊 ${fmt(p.n_pods)} 個 POD<br>IT 銘牌約 ${fmt(p.mw, 1)} MW（示意，未進能耗模型）`;
+  else tip.innerHTML = `<b>POD ${p.index + 1}</b>${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}<br>7 櫃・液冷 + 疊放乾冷卻器模組<br>位置 (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) m`;
+  tip.hidden = false; tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - 270)) + 'px'; tip.style.top = Math.max(8, Math.min(y + 14, innerHeight - 100)) + 'px';
+}
 addEventListener('pointermove', e => {
+  if (e.pointerType && e.pointerType !== 'mouse') return;
   if (e.target !== $('#scene')) { $('#tip').hidden = true; return; }
   clearTimeout(tipTimer); tipTimer = setTimeout(() => {
-    const p = scene.pick(e.clientX, e.clientY); const tip = $('#tip');
-    if (!p) { tip.hidden = true; return; }
-    if (p.kind === 'sub') tip.innerHTML = `<b>變電站${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}</b><br>中壓進線 → 主變壓器 ×2 → 開關室 → 區塊 ${fmt(p.n_pods)} 個 POD<br>IT 銘牌約 ${fmt(p.mw, 1)} MW（示意，未進能耗模型）`;
-    else tip.innerHTML = `<b>POD ${p.index + 1}</b>${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}<br>7 櫃（GB300 代理）・液冷 + 疊放乾冷卻器模組<br>位置 (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) m`;
-    tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 280) + 'px'; tip.style.top = Math.min(e.clientY + 14, innerHeight - 90) + 'px';
+    showTip(e.clientX, e.clientY);
   }, 40);
 });
 
@@ -226,13 +289,18 @@ $('#exportBtn').onclick = async () => {
 // ---------------------------------------------------------------- 啟動
 (async function main() {
   [CLIM, GRID] = await Promise.all([fetch('data/climate_summary.json').then(r => r.json()), fetch('data/results_grid.json').then(r => r.json())]);
-  scene = new PodScene($('#scene')); await scene.load();
+  scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto }); await scene.load();
+  const qualityUI = () => { $$('#qualitySeg button').forEach(b => { b.classList.toggle('on', b.dataset.q === scene.quality); b.onclick = () => { store.set('quality', b.dataset.q); scene.setQuality(b.dataset.q); qualityUI(); }; });
+    $('#qualityHint').textContent = scene.quality === 'lite' ? '無陰影、簡化材質與植被' : '陰影、天空光、完整植被'; };
+  scene.onQualityChange = (q, why) => { qualityUI(); if (why) $('#qualityHint').textContent = why; };
+  qualityUI();
   tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply');
   update(); scene.frame();
   if (Q.get('tab')) $(`#data .tab[data-tab="${Q.get('tab')}"]`)?.click();
   if (Q.get('nav')) $(`#nav .tab[data-tab="${Q.get('nav')}"]`)?.click();
   if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
   scene.setVisible({ shell: true, cooler: true, rack: false });
+  if (Q.get('panel') === 'menu') document.body.classList.add('menu-open'); if (Q.get('panel') === 'sheet') document.body.classList.add('sheet-open');   // 測試 / 分享用
   scene.start();
   $('#loading').classList.add('done'); checkApi();
 })();
