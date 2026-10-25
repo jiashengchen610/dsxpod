@@ -14,7 +14,13 @@ const ROAD_Z = SETBACK - 5;                                     // 服務道路�
 const SVC_W = 6, PUB_W = 8, GATE = 4.5;                         // 廠內道路寬、廠外公路寬、大門半寬
 const ROAD_LEN = 6000;                                          // 廠外公路往東西兩側各延伸到霧裡
 const PUB_Z = SETBACK + 9;                                      // 廠外公路中心（three z）：南側圍籬外 9 m
-const RACKS = Array.from({ length: 7 }, (_, i) => [2.5 + i * 0.6, 0.06]);   // 與 dsxpod/usd_out.rack_positions 一致
+// 貨櫃內排列：與 dsxpod/usd_out.INTERIOR 一致（照 NVIDIA DSX POD 官方剖面圖：配電盤 + 滅火鋼瓶 | 3 櫃 + 列間 CDU + 4 櫃）
+const INTERIOR = { panel_x: 0.15, panel: [0.6, 0.45, 2.0], bottles_x: [0.98, 1.38], bottle_r: 0.17, bottle_h: 1.5,
+  rack_x: [1.8, 2.4, 3.0, 4.95, 5.55, 6.15, 6.75], cdu_x: 3.65, cdu: [1.2, 1.2, 2.4], fire_pipe: { y: 1.3, z: 2.7, r: 0.05 }, headers: { y: [1.85, 2.15], z: 2.45, r: 0.12 } };
+const WALL_T = 0.04, FLOOR_Z = 0.10;
+const RACKS = INTERIOR.rack_x.map(x => [x, WALL_T + 0.02]);
+const SKID_L = 6.058, SKID_H = 2.591, SKID_GAP = 1.5;              // 每個 POD 東端的 20 ft 電力模組（與 sizing / usd_out 一致）
+const BASE_Y = 0.15;                                            // 貨櫃坐在 15 cm 混凝土墩上（也避免和地面基座搶深度而閃爍）
 const DETAIL_DIST = 260;                                        // 高畫質：鏡頭距離 > 這個 → 色塊
 const ALWAYS_DETAIL = 56;                                       // 高畫質：POD 數不超過這個時，不論遠近都畫細節模型
 // 輕量畫質一律用色塊（白色貨櫃 + 綠色腰帶 + 灰色散熱模組 + 深色風扇面），不畫降級後的細節模型
@@ -146,10 +152,93 @@ function vegKinds(veg) {
   return K;
 }
 
+
+// ---------------------------------------------------------------- 貨櫃內部（剖面用；照官方剖面圖：機櫃正面大量黃色網路線、列間 CDU 有螢幕、紅色消防）
+function canvasTex(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
+let _rackTex, _cduTex, _panelTex;
+function rackFrontTex() {
+  return _rackTex ||= canvasTex(128, 512, (g, w, h) => {
+    const r = rng(17);
+    g.fillStyle = '#141518'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#23252a'; for (let y = 18; y < h - 18; y += 9) g.fillRect(8, y, w - 16, 6);             // 運算 / 交換托盤
+    g.lineCap = 'round';
+    for (let i = 0; i < 70; i++) {                                                                          // 黃色網路線束（整座 17 km）
+      const x = 22 + r() * (w - 44), y0 = 30 + r() * 60, y1 = h - 40 - r() * 60;
+      g.strokeStyle = `rgba(${235 + r() * 20 | 0},${185 + r() * 40 | 0},${20 + r() * 30 | 0},${0.55 + r() * 0.4})`; g.lineWidth = 1.2 + r() * 1.6;
+      g.beginPath(); g.moveTo(x, y0); g.bezierCurveTo(x + (r() - 0.5) * 30, y0 + 120, x + (r() - 0.5) * 30, y1 - 120, x + (r() - 0.5) * 8, y1); g.stroke();
+    }
+    for (let y = 22; y < h - 20; y += 18) { g.fillStyle = r() < 0.85 ? '#76b900' : '#3987e5'; g.fillRect(10, y, 3, 3); }   // 狀態燈
+    g.fillStyle = '#0c0d0f'; g.fillRect(0, 0, w, 12); g.fillRect(0, h - 14, w, 14);
+  });
+}
+function cduFrontTex() {
+  return _cduTex ||= canvasTex(256, 512, (g, w, h) => {
+    g.fillStyle = '#18191c'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#9fd2ff'; g.fillRect(w * 0.36, 60, w * 0.28, 44); g.fillStyle = '#0d2236'; g.fillRect(w * 0.38, 64, w * 0.24, 36);   // 觸控螢幕
+    g.fillStyle = '#76b900'; g.fillRect(w * 0.4, 72, w * 0.1, 4); g.fillStyle = '#3987e5'; g.fillRect(w * 0.4, 82, w * 0.16, 4);
+    g.fillStyle = '#26282d'; for (let y = 150; y < h - 30; y += 10) g.fillRect(24, y, w - 48, 5);           // 進風格柵
+  });
+}
+function panelTex() {
+  return _panelTex ||= canvasTex(128, 384, (g, w, h) => {
+    g.fillStyle = '#d4d6d3'; g.fillRect(0, 0, w, h); g.strokeStyle = '#9a9c99'; g.strokeRect(6, 6, w - 12, h - 12);
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 4; c++) { g.fillStyle = '#2b2d30'; g.fillRect(18 + c * 24, 40 + r * 30, 16, 20); g.fillStyle = r % 3 ? '#e2e3e0' : '#d95926'; g.fillRect(22 + c * 24, 46 + r * 30, 8, 6); }
+    g.fillStyle = '#d8382b'; g.fillRect(w - 30, 18, 14, 10);
+  });
+}
+function buildInterior(quality) {
+  const G = new THREE.Group(); const Std = quality === 'high' ? THREE.MeshStandardMaterial : THREE.MeshLambertMaterial;
+  const mat = (o) => { o = { ...o }; if (quality !== 'high') { delete o.metalness; delete o.roughness; } return new Std(o); };
+  const own = (mesh, info) => { mesh.userData.own = true; mesh.castShadow = mesh.receiveShadow = true; if (info) mesh.userData.info = info; return mesh; };
+  const box = (w, h, d, x, y, z, m, info) => own(new THREE.Mesh(new THREE.BoxGeometry(w, h, d).translate(x + w / 2, y + h / 2, z - d / 2), m), info);
+  const yRow = WALL_T + 0.02;                                                     // 一排靠南牆（USD y）→ three z = -y
+  // 機櫃：深色本體 + 正面貼圖
+  const body = mat({ color: 0x1a1b1e, roughness: 0.55, metalness: 0.5 });
+  const front = mat({ map: rackFrontTex(), roughness: 0.6, metalness: 0.2 });
+  const rackMats = [body, body, body, body, front, body];                        // BoxGeometry 面順序 +x −x +y −y +z −z；正面朝南（three +z）
+  INTERIOR.rack_x.forEach((x, i) => {
+    const m = own(new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.3, 1.2).translate(x + 0.3, FLOOR_Z + 1.15, -(yRow + 0.6)), rackMats),
+      { key: 'part.rack', p: { i: i + 1 }, name: `機櫃 ${i + 1}`, detail: 'Vera Rubin NVL72（GB300 規格代理）・72 GPU・NVFP4 推論 3,600 PFLOPS・液冷' });
+    G.add(m);
+  });
+  // 列間 CDU
+  const cduBody = mat({ color: 0x1d1e21, roughness: 0.5, metalness: 0.4 }), cduFront = mat({ map: cduFrontTex(), roughness: 0.5 });
+  G.add(own(new THREE.Mesh(new THREE.BoxGeometry(...[INTERIOR.cdu[0], INTERIOR.cdu[2], INTERIOR.cdu[1]]).translate(INTERIOR.cdu_x + INTERIOR.cdu[0] / 2, FLOOR_Z + INTERIOR.cdu[2] / 2, -(yRow + INTERIOR.cdu[1] / 2)),
+    [cduBody, cduBody, cduBody, cduBody, cduFront, cduBody]), { key: 'part.cdu', name: 'CDU（冷卻液分配單元）', detail: 'Vertiv XDU2300・2.3 MW・機櫃液冷迴路 ↔ 乾冷卻器水迴路' }));
+  // 配電盤
+  const [pw, pd, ph] = INTERIOR.panel;
+  G.add(own(new THREE.Mesh(new THREE.BoxGeometry(pw, ph, pd).translate(INTERIOR.panel_x + pw / 2, FLOOR_Z + ph / 2, -(yRow + pd / 2)),
+    [mat({ color: 0xc9cbc8 }), mat({ color: 0xc9cbc8 }), mat({ color: 0xc9cbc8 }), mat({ color: 0xc9cbc8 }), mat({ map: panelTex(), roughness: 0.5 }), mat({ color: 0xc9cbc8 })]),
+    { key: 'part.pdu', name: '配電盤', detail: '貨櫃內配電（接園區變電站）' }));
+  // 潔淨氣體滅火鋼瓶 + 天花板消防管與撒水頭
+  const red = mat({ color: 0xc1140f, roughness: 0.35, metalness: 0.3 });
+  const fs = new THREE.Group(); fs.userData.info = { key: 'part.fire', name: '潔淨氣體滅火系統', detail: '2 支鋼瓶 + 天花板消防管（依官方剖面圖）' };
+  INTERIOR.bottles_x.forEach(x => {
+    fs.add(own(new THREE.Mesh(new THREE.CylinderGeometry(INTERIOR.bottle_r, INTERIOR.bottle_r, INTERIOR.bottle_h, 20).translate(x, FLOOR_Z + INTERIOR.bottle_h / 2, -(WALL_T + 0.25)), red)));
+    fs.add(own(new THREE.Mesh(new THREE.SphereGeometry(INTERIOR.bottle_r, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).translate(x, FLOOR_Z + INTERIOR.bottle_h, -(WALL_T + 0.25)), red)));
+    fs.add(own(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, CH - FLOOR_Z - INTERIOR.bottle_h - 0.35, 8).translate(x, FLOOR_Z + INTERIOR.bottle_h + (CH - FLOOR_Z - INTERIOR.bottle_h - 0.35) / 2 + 0.1, -(WALL_T + 0.25)), red)));
+  });
+  const fp = INTERIOR.fire_pipe;
+  fs.add(own(new THREE.Mesh(new THREE.CylinderGeometry(fp.r, fp.r, L - 0.6, 10).rotateZ(Math.PI / 2).translate(L / 2, fp.z, -fp.y), red)));
+  for (let x = 1.0; x < L - 0.5; x += 1.5) fs.add(own(new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.035, 0.18, 8).translate(x, fp.z - 0.12, -fp.y), red)));
+  G.add(fs);
+  // 供回水主管（北側上方）
+  const pipe = mat({ color: 0x6b6f75, roughness: 0.35, metalness: 0.8 }), hd = INTERIOR.headers;
+  const hg = new THREE.Group(); hg.userData.info = { key: 'part.header', name: '供回水主管', detail: '機櫃液冷迴路 → CDU → 疊放乾冷卻器（TCS 45 °C 溫水）' };
+  hd.y.forEach(y => hg.add(own(new THREE.Mesh(new THREE.CylinderGeometry(hd.r, hd.r, L - 0.4, 16).rotateZ(Math.PI / 2).translate(L / 2, hd.z, -y), pipe))));
+  for (let x = 0.8; x < L - 0.4; x += 2.2) hd.y.forEach(y => hg.add(own(new THREE.Mesh(new THREE.CylinderGeometry(hd.r * 1.25, hd.r * 1.25, 0.06, 16).rotateZ(Math.PI / 2).translate(x, hd.z, -y), pipe))));   // 法蘭
+  G.add(hg);
+  // 天花板燈帶（只是外觀）
+  const glow = new THREE.MeshBasicMaterial({ color: 0xeef3ff });
+  for (let x = 1.2; x < L - 1; x += 2.4) G.add(own(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.03, 0.12).translate(x, CH - 0.08, -W * 0.45), glow)));
+  return G;
+}
+
 export class PodScene {
   // 畫質：high = 陰影、天空 shader + 環境光、PBR 材質、完整植被；lite（輕量）= 無陰影、純色天空、Lambert 材質、植被 1/3、像素密度 1、提早換方塊。
   // 兩種都「按需渲染」：鏡頭沒動、資料沒變就不重畫（手機省電、筆電不發燙）。
-  constructor(canvas, { quality = 'high', autoDowngrade = false } = {}) {
+  constructor(canvas, { quality = 'high', autoDowngrade = false, labels = null } = {}) {
+    this.labels = labels;                                          // 基地標籤文字（app.js 依語言給；null 用中文）
     this.canvas = canvas; this.quality = quality; this.autoDowngrade = autoDowngrade; this.dirty = true; this.onQualityChange = null;
     const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'high', powerPreference: quality === 'high' ? 'high-performance' : 'low-power' });
     r.setPixelRatio(this._dpr()); r.setSize(innerWidth, innerHeight);
@@ -182,15 +271,18 @@ export class PodScene {
     this.gravelTex = noiseTex(['#8e8f89', '#7f807a', '#a0a19a', '#727470'], { blobs: 500, rMin: 2, rMax: 10, speck: 16000, seed: 3 });
     addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); r.setSize(innerWidth, innerHeight); this.dirty = true; });
     this.controls.addEventListener('change', () => { this.dirty = true; });
+    this.controls.addEventListener('start', () => { this.tween = null; });          // 使用者一拖動就交還控制
   }
 
   // 遠景方塊 / 機櫃材質：高畫質 PBR，輕量 Lambert（沒有環境光時 PBR 金屬感會發黑）
   _boxMat(kind) {
     this._boxMats ||= {
       high: { shell: new THREE.MeshStandardMaterial({ color: 0xdcdedb, roughness: 0.6, metalness: 0.15 }), cool: new THREE.MeshStandardMaterial({ color: 0x9a9fa5, roughness: 0.55, metalness: 0.35 }), rack: new THREE.MeshStandardMaterial({ color: 0x1c1c1f, roughness: 0.5, metalness: 0.6 }),
-              band: new THREE.MeshStandardMaterial({ color: 0x76b900, roughness: 0.6 }), deck: new THREE.MeshStandardMaterial({ color: 0x4a4e53, roughness: 0.7, metalness: 0.3 }) },
+              band: new THREE.MeshStandardMaterial({ color: 0x76b900, roughness: 0.6 }), deck: new THREE.MeshStandardMaterial({ color: 0x4a4e53, roughness: 0.7, metalness: 0.3 }),
+              plinth: new THREE.MeshStandardMaterial({ color: 0xa9aaa3, roughness: 0.9 }), skid: new THREE.MeshStandardMaterial({ color: 0xd6d8d8, roughness: 0.55, metalness: 0.2 }), busway: new THREE.MeshStandardMaterial({ color: 0x1e2023, roughness: 0.7, metalness: 0.4 }) },
       lite: { shell: new THREE.MeshLambertMaterial({ color: 0xe8eae7 }), cool: new THREE.MeshLambertMaterial({ color: 0xa3a8ae }), rack: new THREE.MeshLambertMaterial({ color: 0x2a2a2e }),
-              band: new THREE.MeshLambertMaterial({ color: 0x76b900 }), deck: new THREE.MeshLambertMaterial({ color: 0x55595e }) },
+              band: new THREE.MeshLambertMaterial({ color: 0x76b900 }), deck: new THREE.MeshLambertMaterial({ color: 0x55595e }),
+              plinth: new THREE.MeshLambertMaterial({ color: 0xb4b5ae }), skid: new THREE.MeshLambertMaterial({ color: 0xdcdedd }), busway: new THREE.MeshLambertMaterial({ color: 0x2a2c30 }) },
     };
     return this._boxMats[this.quality][kind];
   }
@@ -206,6 +298,8 @@ export class PodScene {
     if (hi && this.envDirty) this._bakeEnv();
     this.scene.environment = hi && this.envRT ? this.envRT.texture : null;
     for (const [k, parts] of [['shell', this.shellParts], ['cooler', this.coolerParts]]) (this.sets[k] || []).forEach((m, i) => { m.material = hi ? parts[i].mat : parts[i].lite; });
+    (this.sets.skid || []).forEach((m, i) => { m.material = hi ? this.skidParts[i].mat : this.skidParts[i].lite; });
+    if (this.sets.boxSkid) this.sets.boxSkid[0].material = this._boxMat('skid');
     if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.boxCool[1].material = this._boxMat('deck'); this.sets.boxBand[0].material = this._boxMat('band'); this.sets.rack[0].material = this._boxMat('rack'); }
     this.scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
     this.lod = null; this.updateLod(); this._buildSurroundings(); this.dirty = true;
@@ -219,14 +313,15 @@ export class PodScene {
       g.scene.updateMatrixWorld(true);
       g.scene.traverse(o => { if (o.isMesh) { const geo = o.geometry.clone(); geo.applyMatrix4(o.matrixWorld); if (dy) geo.translate(0, dy, 0); const m = o.material.clone(); m.side = THREE.DoubleSide;
         const lite = new THREE.MeshLambertMaterial({ color: m.color, map: m.map || null, side: THREE.DoubleSide, vertexColors: m.vertexColors, flatShading: m.flatShading });   // GLB 沒有法線 → GLTFLoader 開了 flatShading，要一起帶
-        parts.push({ geo, mat: m, lite }); } });
+        parts.push({ geo, mat: m, lite, name: o.name }); } });
       return parts;
     };
     // 散熱模組 GLB 以自身底面為 0；疊放在貨櫃頂上 → 墊高一個貨櫃高（USD 端是 Reference 的 translate，同一個數）
-    [this.shellParts, this.coolerParts] = await Promise.all([grab('container.glb'), grab('cooler_module.glb', CH)]);
+    [this.shellParts, this.coolerParts, this.skidParts] = await Promise.all([grab('container.glb'), grab('cooler_module.glb', CH), grab('power_skid.glb')]);
+    this.boxSkidGeo = new THREE.BoxGeometry(SKID_L, SKID_H, W).translate(SKID_L / 2, SKID_H / 2, -W / 2);
     this.boxShellGeo = new THREE.BoxGeometry(L, CH, W).translate(L / 2, CH / 2, -W / 2);
     this.boxCoolGeo = new THREE.BoxGeometry(L, MH, W).translate(L / 2, CH + MH / 2, -W / 2);
-    this.boxBandGeo = new THREE.BoxGeometry(L + 0.03, 0.32, W + 0.03).translate(L / 2, 0.42, -W / 2);              // 綠色腰帶（同 GLB 的 Band）
+    this.boxBandGeo = new THREE.BoxGeometry(L + 0.03, 0.9, W + 0.03).translate(L / 2, 0.55, -W / 2);               // 綠色下段（同 GLB 的 Band，約下 1/3）
     this.boxDeckGeo = new THREE.BoxGeometry(L - 0.5, 0.08, W - 0.5).translate(L / 2, CH + MH + 0.04, -W / 2);      // 風扇面
     this.rackGeo = new THREE.BoxGeometry(0.6, 2.3, 1.2).translate(0.3, 0.1 + 1.15, -0.6);
   }
@@ -240,8 +335,14 @@ export class PodScene {
       boxShell: [mk(this.boxShellGeo, this._boxMat('shell'), cap)],
       boxCool: [mk(this.boxCoolGeo, this._boxMat('cool'), cap), mk(this.boxDeckGeo, this._boxMat('deck'), cap)],
       boxBand: [mk(this.boxBandGeo, this._boxMat('band'), cap)],
+      plinth: [mk(new THREE.BoxGeometry(L - 0.4, BASE_Y, W - 0.3).translate(L / 2, -BASE_Y / 2, -W / 2), this._boxMat('plinth'), cap)],
       rack: [mk(this.rackGeo, this._boxMat('rack'), cap * 7)],
+      skid: this.skidParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
+      boxSkid: [mk(this.boxSkidGeo, this._boxMat('skid'), cap)],
+      skidPlinth: [mk(new THREE.BoxGeometry(SKID_L - 0.3, BASE_Y, W - 0.3).translate(SKID_L / 2, -BASE_Y / 2, -W / 2), this._boxMat('plinth'), cap)],
+      busway: [mk(new THREE.BoxGeometry(SKID_GAP + 0.3, 0.2, 0.8).translate(-(SKID_GAP + 0.3) / 2 + 0.15, 0.1 - BASE_Y, -W / 2), this._boxMat('busway'), cap)],   // 800 VDC 地面線槽
     };
+    this.skidPicker = this.sets.boxSkid[0];
     this.picker = this.sets.boxShell[0];
     this.cap = cap;
   }
@@ -251,12 +352,16 @@ export class PodScene {
     const pods = layout.pods; const n = pods.length;
     if (n > this.cap) this._alloc(Math.max(64, 2 ** Math.ceil(Math.log2(n))));
     const M = new THREE.Matrix4();
-    const all = [...this.sets.shell, ...this.sets.cooler, ...this.sets.boxShell, ...this.sets.boxCool, ...this.sets.boxBand];
-    pods.forEach((p, i) => { M.makeTranslation(p.x, 0, -p.y); all.forEach(m => m.setMatrixAt(i, M)); });
+    const all = [...this.sets.shell, ...this.sets.cooler, ...this.sets.boxShell, ...this.sets.boxCool, ...this.sets.boxBand, ...this.sets.plinth];
+    pods.forEach((p, i) => { M.makeTranslation(p.x, BASE_Y, -p.y); all.forEach(m => m.setMatrixAt(i, M)); });
+    this.hiddenPod = null;
     const rk = this.sets.rack[0]; let k = 0;
-    pods.forEach(p => RACKS.forEach(([x, y]) => { M.makeTranslation(p.x + x, 0, -(p.y + y)); rk.setMatrixAt(k++, M); }));
+    pods.forEach(p => RACKS.forEach(([x, y]) => { M.makeTranslation(p.x + x, BASE_Y, -(p.y + y)); rk.setMatrixAt(k++, M); }));
     all.forEach(m => { m.count = n; m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
     rk.count = k; rk.instanceMatrix.needsUpdate = true;
+    const sk = [...this.sets.skid, ...this.sets.boxSkid, ...this.sets.skidPlinth, ...this.sets.busway];   // 800 VDC 電力中心：貨櫃東端 + 1.5 m，中間地面線槽
+    pods.forEach((p, i) => { M.makeTranslation(p.x + L + SKID_GAP, BASE_Y, -p.y); sk.forEach(m => m.setMatrixAt(i, M)); });
+    sk.forEach(m => { m.count = n; m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
     this.n = n; this.pods = pods;
     const [sx, sy] = layout.site_m; this.extent = { sx, sy, cx: sx / 2 - SETBACK, cy: sy / 2 - SETBACK };
     this._sitePads(layout);
@@ -267,6 +372,7 @@ export class PodScene {
     this._buildSurroundings();
     this.highlight.visible = false;
     this._applyVis(); this.dirty = true;
+    if (this.cut) this._unit(true, true);
   }
 
   // 基地鋪面（礫石）+ 區塊混凝土基座
@@ -327,12 +433,12 @@ export class PodScene {
     // 尺寸標註
     const tag = (text, x, z, h) => { const s = label(text); s.scale.set(h * s.userData.aspect, h, 1); s.position.set(x, h * 0.6, z); G.add(s); };
     const h = Math.max(2.4, span / 36);
-    { const s = label(`基地 ${bx.toFixed(1)} × ${by.toFixed(1)} m・${(bx * by / 1e4).toFixed(2)} ha`); s.scale.set(h * s.userData.aspect, h, 1); s.position.set(x0 + h * s.userData.aspect / 2, h * 0.6, z0 + h * 1.5); G.add(s); }
+    { const s = label(this.labels ? this.labels.site(bx.toFixed(1), by.toFixed(1), (bx * by / 1e4).toFixed(2)) : `基地 ${bx.toFixed(1)} × ${by.toFixed(1)} m・${(bx * by / 1e4).toFixed(2)} ha`); s.scale.set(h * s.userData.aspect, h, 1); s.position.set(x0 + h * s.userData.aspect / 2, h * 0.6, z0 + h * 1.5); G.add(s); }
     tag(`${by.toFixed(1)} m`, x1 + h * 2, (z0 + z1) / 2, h * 0.85);
     if (req.site_l) {                                               // 實際使用範圍（佈局外框）
       const u = [[-SETBACK, SETBACK], [-SETBACK + sx, SETBACK], [-SETBACK + sx, SETBACK - sy], [-SETBACK, SETBACK - sy], [-SETBACK, SETBACK]].map(([x, z]) => new THREE.Vector3(x, 0.16, z));
       const dl = new THREE.Line(new THREE.BufferGeometry().setFromPoints(u), new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: h * 0.6, gapSize: h * 0.4 })); dl.computeLineDistances(); G.add(dl);
-      tag(`使用 ${sx.toFixed(0)} × ${sy.toFixed(0)} m`, -SETBACK + sx / 2, SETBACK - sy - h * 0.6, h * 0.8);
+      tag(this.labels ? this.labels.use(sx.toFixed(0), sy.toFixed(0)) : `使用 ${sx.toFixed(0)} × ${sy.toFixed(0)} m`, -SETBACK + sx / 2, SETBACK - sy - h * 0.6, h * 0.8);
     }
     this.siteRect = { x0, z0, x1, z1 };
   }
@@ -520,17 +626,76 @@ export class PodScene {
     const sx = r.x1 - r.x0, sy = r.z0 - r.z1; return { sx, sy, cx: (r.x0 + r.x1) / 2, cy: -(r.z0 + r.z1) / 2 };
   }
 
-  frame() {
+  // ---------------------------------------------------------------- 鏡頭分鏡
+  // site：低角度全景（看得到遠山）；size：鳥瞰整個基地；cool：拉近一個 POD 的散熱模組；unit：打開一個貨櫃南牆看內部。
+  _sizePose() {
     const { sx, sy, cx, cy } = this._view(); const span = Math.max(sx, sy, 30);
-    this.controls.target.set(cx, 0, -cy);
+    const tgt = new THREE.Vector3(cx, 0, -cy);
     const side = this.camera.aspect < 1 ? 0.28 : 0.62;                   // 直式螢幕用比較正面的視角，基地才放得進中間
-    this.camera.position.set(cx - span * side, span * 0.3 + 12, -cy + span * 1.05 + 22);   // 低一點的視角，看得到地平線與天空
+    const pos = new THREE.Vector3(cx - span * side, span * 0.3 + 12, -cy + span * 1.05 + 22);
     // 依水平視角算距離：基地外接圓（半徑約 0.62 × 邊長）要放得進左右視野；直式手機會自動拉遠
-    const v = this.camera.position.clone().sub(this.controls.target);
+    const v = pos.clone().sub(tgt);
     const hHalf = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect);
     const need = (span * 0.62) / Math.sin(hHalf);
-    if (v.length() < need) this.camera.position.copy(this.controls.target).add(v.setLength(need));
-    this.controls.update(); this.dirty = true;
+    if (v.length() < need) pos.copy(tgt).add(v.setLength(need));
+    return { pos, tgt };
+  }
+
+  _focusPod() { return this.pods && this.pods[0]; }              // 西南角第一個 POD（最靠近鏡頭、在大門那一側）
+
+  _viewPose(mode) {
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    if (mode === 'size' || !this.pods || !this.pods.length) return this._sizePose();
+    if (mode === 'site') {
+      const { sx, sy, cx, cy } = this._view(); const span = Math.max(sx, sy, 30);
+      const d = Math.max(span * 2.6, 380), tgt = V(cx, span * 0.05, -cy);
+      return { tgt, pos: tgt.clone().add(V(-0.5 * d, 0.13 * d, 0.86 * d)) };
+    }
+    const p = this._focusPod(), k = Math.max(1, Math.sqrt(1 / this.camera.aspect));
+    const pc = V(p.x + L / 2, BASE_Y, -(p.y + W / 2));
+    if (mode === 'cool') return { tgt: pc.clone().add(V(0, CH + MH * 0.5, 0)), pos: pc.clone().add(V(-12 * k, CH + MH + 8 * k, 15 * k)) };
+    if (mode === 'skid') {                                       // 800 VDC 電力中心 + 地面線槽 + 貨櫃東端
+      const sc = V(p.x + L + SKID_GAP + SKID_L * 0.35, BASE_Y + 1.2, -(p.y + W / 2));
+      const hHalf = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect), d = Math.max(14, 6.5 / Math.tan(hHalf));
+      return { tgt: sc, pos: sc.clone().add(V(-6, 4.5, 12).setLength(d)) };
+    }
+    // unit：依水平視角算距離，讓 12 m 長的貨櫃（加一點邊）放得進畫面；桌機兩側面板之間、手機直式都適用
+    const hHalf = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect);
+    const tgt = pc.clone().add(V(-0.3, 1.3, 0)), d = Math.max(17, 7.4 / Math.tan(hHalf));
+    return { tgt, pos: tgt.clone().add(V(-2.5, 2.6, 16.5).setLength(d)) };
+  }
+
+  setView(mode = 'size', { animate = true, duration = 1000 } = {}) {
+    if (!this.extent) return;
+    this.viewMode = mode;
+    this._unit(mode === 'unit');
+    const { pos, tgt } = this._viewPose(mode);
+    if (!animate) { this.tween = null; this.camera.position.copy(pos); this.controls.target.copy(tgt); this.controls.update(); this.dirty = true; return; }
+    this.tween = { p0: this.camera.position.clone(), t0: this.controls.target.clone(), p1: pos, t1: tgt, start: performance.now(), dur: duration };
+    this.dirty = true;
+  }
+
+  frame() { this.setView(this.viewMode || 'size', { animate: false }); }
+
+  // ---------------------------------------------------------------- 剖面：一個貨櫃打開南牆，畫內部設備
+  _hidePod(i) {
+    const M = new THREE.Matrix4(), Z = new THREE.Matrix4().makeScale(0, 0, 0);
+    const sets = [...this.sets.shell, ...this.sets.boxShell, ...this.sets.boxBand];
+    if (this.hiddenPod != null) { const q = this.pods[this.hiddenPod]; if (q) { M.makeTranslation(q.x, BASE_Y, -q.y); sets.forEach(m => { m.setMatrixAt(this.hiddenPod, M); m.instanceMatrix.needsUpdate = true; }); } }
+    this.hiddenPod = i;
+    if (i != null) sets.forEach(m => { m.setMatrixAt(i, Z); m.instanceMatrix.needsUpdate = true; });
+  }
+
+  _unit(on, rebuild = false) {
+    if (this.cut && (!on || rebuild)) {
+      this.scene.remove(this.cut); this.cut.traverse(o => { if (o.isMesh && o.userData.own) { o.geometry.dispose(); } }); this.cut = null; this._hidePod(null);
+    }
+    if (!on || this.cut || !this.pods || !this.pods.length) { this.dirty = true; return; }
+    const p = this._focusPod(), G = this.cut = new THREE.Group(); G.position.set(p.x, BASE_Y, -p.y);
+    const CUT = new Set(['Wall_S', 'Wall_S_Band', 'Door_Hardware']);
+    for (const part of this.shellParts) if (!CUT.has(part.name)) { const m = new THREE.Mesh(part.geo, this.quality === 'high' ? part.mat : part.lite); m.castShadow = m.receiveShadow = true; G.add(m); }
+    G.add(buildInterior(this.quality));
+    this.scene.add(G); this._hidePod(0); this.dirty = true;
   }
 
   setVisible(v) { Object.assign(this.vis, v); this._applyVis(); this.dirty = true; }
@@ -543,6 +708,8 @@ export class PodScene {
     this.sets.boxCool.forEach(m => m.visible = !detail && this.vis.cooler);
     this.sets.boxBand[0].visible = !detail && this.vis.shell;
     this.sets.rack[0].visible = this.vis.rack;
+    this.sets.skid.forEach(m => m.visible = detail);
+    this.sets.boxSkid[0].visible = !detail;
   }
 
   updateLod() {
@@ -556,8 +723,22 @@ export class PodScene {
     if (!this.picker || !this.n) return null;
     this.dirty = true;
     const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -clientY / innerHeight * 2 + 1), this.camera);
+    if (this.cut) {                                              // 剖面內部設備優先
+      const hit = ray.intersectObject(this.cut, true).find(h => { let o = h.object; while (o && !o.userData.info) o = o.parent; return o; });
+      if (hit) {
+        let o = hit.object; while (!o.userData.info) o = o.parent;
+        this.highlight.box.setFromObject(o); this.highlight.visible = true;
+        return { kind: 'part', ...o.userData.info };
+      }
+    }
     const hp = ray.intersectObject(this.picker, false)[0];
     const hs = this.subHit ? ray.intersectObject(this.subHit, false)[0] : null;
+    const hk = ray.intersectObject(this.skidPicker, false)[0];
+    if (hk && hk.instanceId !== undefined && (!hp || hk.distance < hp.distance) && (!hs || hk.distance < hs.distance)) {   // 電力模組
+      const p = this.pods[hk.instanceId], x0 = p.x + L + SKID_GAP;
+      this.highlight.box.set(new THREE.Vector3(x0 - 0.1, -0.05, -(p.y + W + 0.1)), new THREE.Vector3(x0 + SKID_L + 0.35, BASE_Y + SKID_H + 0.1, -p.y + 0.1)); this.highlight.visible = true;
+      return { kind: 'skid', index: hk.instanceId, ...p };
+    }
     if (hs && (!hp || hs.distance < hp.distance)) {
       const b = this.subBlocks[hs.instanceId], s = b.substation, k = subScale(s), ox = s.x + Math.max(0, (s.l - 40 * k) / 2), oz = -s.y - (16 - 16 * k) / 2;
       this.highlight.box.set(new THREE.Vector3(ox, -0.05, oz - 16 * k), new THREE.Vector3(ox + 40 * k, 9.2 * k, oz)); this.highlight.visible = true;
@@ -565,7 +746,7 @@ export class PodScene {
     }
     if (!hp || hp.instanceId === undefined) { this.highlight.visible = false; return null; }
     const p = this.pods[hp.instanceId];
-    this.highlight.box.set(new THREE.Vector3(p.x - 0.1, -0.05, -(p.y + W + 0.1)), new THREE.Vector3(p.x + L + 0.1, CH + (this.vis.cooler ? MH + 0.4 : 0.1), -p.y + 0.1));
+    this.highlight.box.set(new THREE.Vector3(p.x - 0.1, -0.05, -(p.y + W + 0.1)), new THREE.Vector3(p.x + L + 0.1, BASE_Y + CH + (this.vis.cooler ? MH + 0.4 : 0.1), -p.y + 0.1));
     this.highlight.visible = true;
     return { kind: 'pod', index: hp.instanceId, ...p };
   }
@@ -574,6 +755,12 @@ export class PodScene {
     let last = 0; const dts = [];
     const loop = (now) => {
       requestAnimationFrame(loop);
+      if (this.tween) {                                          // 分鏡轉場（easeInOutCubic）
+        const t = Math.min(1, (now - this.tween.start) / this.tween.dur), e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        this.camera.position.lerpVectors(this.tween.p0, this.tween.p1, e); this.controls.target.lerpVectors(this.tween.t0, this.tween.t1, e);
+        if (t >= 1) this.tween = null;
+        this.dirty = true;
+      }
       const moved = this.controls.update();
       if (!moved && !this.dirty) { last = 0; return; }                    // 按需渲染：沒變化就不畫
       this.dirty = false;
@@ -589,7 +776,7 @@ export class PodScene {
       if (this.autoDowngrade && this.quality === 'high' && last && now - last < 250) {
         dts.push(now - last);
         if (dts.length >= 60) { const med = dts.sort((a, b) => a - b)[30]; dts.length = 0; this.autoDowngrade = false;
-          if (med > 45) this.setQuality('lite', `畫面約 ${Math.round(1000 / med)} fps，已自動切到輕量畫質`); }
+          if (med > 45) this.setQuality('lite', { fps: Math.round(1000 / med) }); }
       }
       last = now;
     };

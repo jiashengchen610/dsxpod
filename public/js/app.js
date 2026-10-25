@@ -2,11 +2,13 @@
 // 結果用預算結果表（dsxpod/precompute.py）在 log(MW) 上內插；匯出呼叫本機或部署的 /api/export。
 import { plan } from './sizing.js';
 import { PodScene, ENV } from './scene.js';
+import { t, lang, locale, setLang, applyStatic, siteName, koppenName, landName, warnText } from './i18n.js';
+applyStatic();                                                  // 靜態文字先套語言（載入畫面也要）
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '–' : Number(v).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
-const COOL = { dry_only: '純乾冷卻器', dry_plus_chiller: '乾冷卻器＋冰水機', evaporative: '蒸發式' };
+const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '–' : Number(v).toLocaleString(locale(), { minimumFractionDigits: d, maximumFractionDigits: d });
+const COOL = { dry_only: 'cool.name.dry_only', dry_plus_chiller: 'cool.name.dry_plus_chiller', evaporative: 'cool.name.evaporative' };   // 顯示用 t(COOL[c])
 const SUP = { t45: '45 °C', t32: '32 °C' };
 const SITE_ORDER = ['taoyuan', 'johor', 'phoenix', 'dallas', 'dublin', 'oslo'];
 // 算力：NVIDIA Vera Rubin NVL72 公開規格（每櫃 72 GPU；NVFP4 推論 3.6 EF〔effective〕、訓練 2.5 EF；2026 年資料，正式規格可能再變）。
@@ -18,7 +20,8 @@ const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k);
 const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', preset: null }, store.get('state', {}));
 // 手機 / 窄螢幕：設定進漢堡選單、報告進底部面板
 const MQ = matchMedia('(max-width: 900px)');
-const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open'); };
+const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open');
+  (MQ.matches ? $('#nav') : document.body).appendChild($('#toolbar')); };   // 工具列：桌機浮在左下，手機放進設定面板底部
 applyMobile(); MQ.addEventListener?.('change', () => { applyMobile(); setTimeout(() => { Object.values(charts).forEach(c => c.resize()); scene && scene.frame(); }, 300); });
 // 畫質：網址 q= > 使用者上次選的 > 預設高畫質（太慢會自動降到輕量）
 function initialQuality() {
@@ -61,11 +64,11 @@ function recommend(site, supply, itMW) {
   const ok = r.filter(x => x.m.valid).sort((a, b) => a.m.pue_mean - b.m.pue_mean);
   if (ok.length) {
     const best = ok[0], dry = ok.find(x => x.c !== 'evaporative');
-    if (best.c === 'evaporative' && dry && dry.m.pue_mean - best.m.pue_mean < 0.01) return { c: dry.c, why: `不排熱失敗的方案中 PUE 最低（蒸發式只低 ${fmt((dry.m.pue_mean - best.m.pue_mean) * 1000, 1)}‰ 但每年用水 ${fmt(best.m.water_m3)} m³）` };
-    return { c: best.c, why: '每年 0 小時排不掉熱的方案中 PUE 最低' + (best.c === 'evaporative' ? `（代價：每年用水 ${fmt(best.m.water_m3)} m³）` : '') };
+    if (best.c === 'evaporative' && dry && dry.m.pue_mean - best.m.pue_mean < 0.01) return { c: dry.c, why: t('reco.dry', { d: fmt((dry.m.pue_mean - best.m.pue_mean) * 1000, 1), w: fmt(best.m.water_m3) }) };
+    return { c: best.c, why: t('reco.best') + (best.c === 'evaporative' ? t('reco.best.water', { w: fmt(best.m.water_m3) }) : '') };
   }
   const least = r.sort((a, b) => a.m.unmet_h - b.m.unmet_h)[0];
-  return { c: least.c, why: '三種都有排不掉熱的小時；這個最少，建議改用較低外氣的場址或降低規模' };
+  return { c: least.c, why: t('reco.none') };
 }
 
 // ---------------------------------------------------------------- UI：場址卡片
@@ -74,7 +77,7 @@ function siteCards() {
   for (const k of SITE_ORDER) {
     const c = CLIM[k]; if (!c) continue;
     const b = document.createElement('button'); b.className = 'site' + (k === state.site ? ' on' : ''); b.dataset.site = k;
-    b.innerHTML = `<div class="nm">${c.name.replace(/（.*）/, '')}</div><div class="kp"><b>${c.koppen}</b>${c.koppen_name}・ASHRAE ${c.ashrae}</div><canvas></canvas>
+    b.innerHTML = `<div class="nm">${siteName(k, c)}</div><div class="kp"><b>${c.koppen}</b>${koppenName(c)}・ASHRAE ${c.ashrae}</div><canvas></canvas>
       <div class="ex"><span>${c.extremes.t_min}°</span><span>RH ${c.extremes.rh_mean}%</span><span>${c.extremes.t_max}°</span></div>`;
     b.onclick = () => { state.site = k; $$('.site').forEach(x => x.classList.toggle('on', x.dataset.site === k)); update(); };
     box.appendChild(b);
@@ -119,9 +122,9 @@ function optimize(goal, itMW) {
   return { ...near[0], feasible: true };
 }
 function presetUI(itMW) {
-  const lab = o => `${COOL[o.c]}・${SUP[o.s]}・${fmt(o.m.facility_mwh / 1000, 1)} GWh／年・${fmt(o.m.water_m3)} m³${o.feasible ? '' : '・⚠ 仍有排熱缺口'}`;
+  const lab = o => t('preset.lab', { cool: t(COOL[o.c]), sup: SUP[o.s], gwh: fmt(o.m.facility_mwh / 1000, 1), water: fmt(o.m.water_m3) }) + (o.feasible ? '' : t('preset.gap'));
   const best = { energy: optimize('energy', itMW), water: optimize('water', itMW) };
-  $('#pEnergy').textContent = lab(best.energy); $('#pWater').textContent = lab(best.water);
+  $('#pEnergy').innerHTML = lab(best.energy); $('#pWater').innerHTML = lab(best.water);
   $$('#presetSeg button').forEach(b => { b.classList.toggle('on', b.dataset.p === state.preset); b.onclick = () => { state.preset = b.dataset.p; update(); }; });
   return best;
 }
@@ -132,31 +135,30 @@ function kpiStrip(m) {
   const gwh = m.facility_mwh / 1000;
   $('#dataTagKpi').textContent = `PUE ${fmt(m.pue_mean, 3)}${m.valid ? '' : ' ⚠'}`;
   $('#kpiStrip').innerHTML = [
-    [fmt(m.pue_mean, 3), m.valid ? 'PUE・可滿載' : 'PUE・⚠缺口', m.valid ? 'good' : 'bad'],
-    [gwh >= 1000 ? `${fmt(gwh / 1000, 2)} TWh` : `${fmt(gwh, gwh < 100 ? 1 : 0)} GWh`, '設施耗電／年', ''],
-    [`${fmt(m.water_m3)} m³`, '用水／年', ''],
-    [`${fmt(ef, ef < 100 ? 1 : 0)} EF`, '算力（NVFP4）', ''],
+    [fmt(m.pue_mean, 3), m.valid ? t('strip.pue.ok') : t('strip.pue.bad'), m.valid ? 'good' : 'bad'],
+    [gwh >= 1000 ? `${fmt(gwh / 1000, 2)} TWh` : `${fmt(gwh, gwh < 100 ? 1 : 0)} GWh`, t('strip.energy'), ''],
+    [`${fmt(m.water_m3)} m³`, t('strip.water'), ''],
+    [`${fmt(ef, ef < 100 ? 1 : 0)} EF`, t('strip.compute'), ''],
   ].map(([v, l, c]) => `<div class="${c}"><b>${v}</b><span>${l}</span></div>`).join('');
 }
 
 function kpis(m) {
   kpiStrip(m);
-  const pueCls = m.valid ? 'ok' : 'bad';
   const racks = layout.n_pods * 7, pfI = racks * RUBIN.pf_inf, pfT = racks * RUBIN.pf_train;
+  const h = fmt(m.unmet_h), hmax = fmt(m.unmet_h_max);
+  const badge = `<span class="badge ${m.valid ? 'good' : 'bad'}" title="${m.valid ? t('kpi.ok.t') : t('kpi.gap.t', { h, hmax })}">${m.valid ? t('kpi.ok') : t('kpi.gap', { h })}</span>`;
   $('#kpis').innerHTML = [
-    [`${fmt(pfI)}<small> PFLOPS</small>`, `算力（NVFP4 推論，${fmt(pfI / 1000, 1)} EF）・訓練 ${fmt(pfT)} PFLOPS・${fmt(racks * RUBIN.gpus)} 顆 Vera Rubin GPU`, 'ok wide'],
-    [`${fmt(m.pue_mean, 3)}<span class="badge ${m.valid ? 'good' : 'bad'}" title="${m.valid ? '全年每小時都排得掉熱，PUE 代表真實滿載運轉' : '有些小時排不掉熱：那些小時機櫃必須降載，PUE 沒反映這個代價'}">${m.valid ? '全年可滿載' : '⚠ 有排熱缺口'}</span>`, 'PUE（20 年平均）', pueCls],
-    [`${fmt(m.unmet_h)}<small> h</small>`, '每年排不掉熱的小時（最壞 ' + fmt(m.unmet_h_max) + ' h）', m.valid ? 'ok' : 'bad'],
-    [`${fmt(m.facility_mwh / 1000, 1)}<small> GWh</small>`, '設施耗電／年（不含 IT）', 'ok'],
-    [`${fmt(m.chiller_mwh)}<small> MWh</small>`, '冰水機耗電／年', 'ok'],
-    [`${fmt(m.water_m3)}<small> m³</small>`, '用水／年', 'ok'],
-    [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, `進風溫升（再循環 ${fmt(m.recirc_k, 1)}＋熱島 ${fmt(m.island_k, 1)}，風 3 m/s）`, 'ok'],
-  ].map(([v, l, c]) => `<div class="kpi ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
-  const notes = [`${layout.n_pods} 個 DSX POD（${fmt(layout.n_pods * 7)} 櫃）、IT 銘牌 ${fmt(layout.it_mw, 1)} MW、基地 ${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m（${fmt(layout.area_ha, 2)} ha）${layout.n_blocks > 1 ? `、${layout.n_blocks} 個區塊` : ''}`,
-    '算力用 Vera Rubin NVL72 公開規格（每櫃 NVFP4 推論 3,600 PFLOPS，為 effective 值；訓練 2,500 PFLOPS）；能耗用 GB300 每櫃 136 kW 代理（Vera Rubin 約 190–230 kW），兩者正式數字出來再一起換。',
-    '結果為篩選等級（逐時穩態模型＋經驗再循環與熱島）。'];
-  if (!m.valid) notes.unshift(`<b class="warn">⚠ 這個 PUE 不能單獨看</b>：每年約 ${fmt(m.unmet_h)} 小時（最壞年 ${fmt(m.unmet_h_max)} h）外氣太熱，乾冷卻器無法把水冷到 ${SUP[state.supply]} 供水溫度。模型在那些小時仍照算耗電，但實際上機櫃得降載或停機，所以 PUE 偏樂觀。要全年滿載，改用「乾冷卻器＋冰水機」或「蒸發式」（比較分頁有三者對照）。`);
-  $('#sumNotes').innerHTML = '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>';
+    [`${fmt(pfI)}<small> PFLOPS</small>`, t('kpi.compute', { gpus: fmt(racks * RUBIN.gpus) }), 'ok wide', t('kpi.compute.t', { pfT: fmt(pfT) })],
+    [`${fmt(m.pue_mean, 3)}${badge}`, t('kpi.pue'), m.valid ? 'ok' : 'bad', ''],
+    [`${fmt(m.facility_mwh / 1000, 1)}<small> GWh</small>`, t('kpi.energy'), 'ok', ''],
+    [`${fmt(m.water_m3)}<small> m³</small>`, t('kpi.water'), 'ok', ''],
+    [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, t('kpi.rise'), 'ok', t('kpi.rise.t', { r: fmt(m.recirc_k, 1), i: fmt(m.island_k, 1) })],
+  ].map(([v, l, c, tt]) => `<div class="kpi ${c}" title="${tt}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+  const notes = [t('note.layout', { pods: fmt(layout.n_pods), racks: fmt(racks), mw: fmt(layout.it_mw, 1), l: fmt(layout.site_m[0]), w: fmt(layout.site_m[1]), ha: fmt(layout.area_ha, 2),
+    blocks: layout.n_blocks > 1 ? t('note.blocks', { n: layout.n_blocks }) : '' })];
+  if (!m.valid) notes.unshift(t('note.warn', { h, hmax, sup: SUP[state.supply] }));
+  $('#sumNotes').innerHTML = '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>' +
+    `<details><summary>${t('note.more')}</summary><ul><li>${t('note.rubin')}</li><li>${t('note.screen')}</li></ul></details>`;
 }
 
 function chartOpts(extra) {
@@ -168,38 +170,46 @@ function make(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new 
 function yearChart(all) {
   const ys = Object.keys(all[state.cooling].years).sort();
   const col = { dry_only: css('--s1'), dry_plus_chiller: css('--s2'), evaporative: css('--s3') };
-  make('yearChart', { type: 'line', data: { labels: ys, datasets: Object.keys(COOL).filter(c => all[c]).map(c => ({ label: COOL[c], data: ys.map(y => all[c].years[y]),
+  make('yearChart', { type: 'line', data: { labels: ys, datasets: Object.keys(COOL).filter(c => all[c]).map(c => ({ label: t(COOL[c]), data: ys.map(y => all[c].years[y]),
       borderColor: col[c], backgroundColor: col[c], borderWidth: c === state.cooling ? 2.5 : 1.2, pointRadius: c === state.cooling ? 2.5 : 0, tension: .25 })) },
     options: chartOpts({ plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 10, boxHeight: 10 } } }, scales: { y: { title: { display: true, text: 'PUE' } }, x: { grid: { display: false } } } }) });
 }
 
 function mixChart(m) {
-  const lab = { dry_cooler_mwh: '乾冷卻器風扇', pumps_mwh: '泵', chiller_mwh: '冰水機', air_fan_mwh: '氣側風扇', air_dx_mwh: '氣側機械冷卻', ups_loss_mwh: 'UPS 與配電損失' };
-  const keys = Object.keys(lab);
-  make('mixChart', { type: 'bar', data: { labels: keys.map(k => lab[k]), datasets: [{ data: keys.map(k => m.mix[k] || 0), backgroundColor: css('--s1'), borderRadius: 4, maxBarThickness: 22 }] },
-    options: chartOpts({ indexAxis: 'y', scales: { x: { title: { display: true, text: 'MWh / 年' } }, y: { grid: { display: false } } },
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${fmt(c.parsed.x)} MWh/年` } } } }) });
+  const keys = ['dry_cooler_mwh', 'pumps_mwh', 'chiller_mwh', 'air_fan_mwh', 'air_dx_mwh', 'ups_loss_mwh'];
+  make('mixChart', { type: 'bar', data: { labels: keys.map(k => t('mix.' + k)), datasets: [{ data: keys.map(k => m.mix[k] || 0), backgroundColor: css('--s1'), borderRadius: 4, maxBarThickness: 22 }] },
+    options: chartOpts({ indexAxis: 'y', scales: { x: { title: { display: true, text: t('mix.axis') } }, y: { grid: { display: false } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => t('mix.tip', { v: fmt(c.parsed.x) }) } } } }) });
 }
 
 function cmpTable(all, reco) {
-  $('#cmpTable').innerHTML = `<table><thead><tr><th>策略</th><th>PUE</th><th>排不掉熱 h</th><th>冰水機 MWh</th><th>用水 m³</th></tr></thead><tbody>` +
-    Object.keys(COOL).filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${COOL[c]}${c === reco.c ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table><p class="hint">★ 推薦：' + reco.why + '</p>';
+  $('#cmpTable').innerHTML = `<table><thead><tr><th>${t('cmp.strategy')}</th><th>PUE</th><th>${t('cmp.unmet')}</th><th>${t('cmp.chiller')}</th><th>${t('cmp.water')}</th></tr></thead><tbody>` +
+    Object.keys(COOL).filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === reco.c ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table><p class="hint">' + t('cmp.reco') + reco.why + '</p>';
 }
 
 function climCharts() {
-  const c = CLIM[state.site], m = c.monthly, lab = m.map(x => x.month + '月');
+  const c = CLIM[state.site], m = c.monthly, lab = m.map(x => t('month')[x.month - 1]);
   make('climT', { type: 'line', data: { labels: lab, datasets: [
-    { label: '絕對最高', data: m.map(x => x.t_abs_max), borderColor: css('--s2'), borderDash: [4, 3], borderWidth: 1, pointRadius: 0 },
-    { label: '日最高平均', data: m.map(x => x.t_max_mean), borderColor: css('--s2'), backgroundColor: 'rgba(217,89,38,.16)', fill: '+1', borderWidth: 2, pointRadius: 0, tension: .3 },
-    { label: '日最低平均', data: m.map(x => x.t_min_mean), borderColor: css('--s1'), borderWidth: 2, pointRadius: 0, tension: .3 },
-    { label: '絕對最低', data: m.map(x => x.t_abs_min), borderColor: css('--s1'), borderDash: [4, 3], borderWidth: 1, pointRadius: 0 }] },
+    { label: t('clim.absmax'), data: m.map(x => x.t_abs_max), borderColor: css('--s2'), borderDash: [4, 3], borderWidth: 1, pointRadius: 0 },
+    { label: t('clim.tmax'), data: m.map(x => x.t_max_mean), borderColor: css('--s2'), backgroundColor: 'rgba(217,89,38,.16)', fill: '+1', borderWidth: 2, pointRadius: 0, tension: .3 },
+    { label: t('clim.tmin'), data: m.map(x => x.t_min_mean), borderColor: css('--s1'), borderWidth: 2, pointRadius: 0, tension: .3 },
+    { label: t('clim.absmin'), data: m.map(x => x.t_abs_min), borderColor: css('--s1'), borderDash: [4, 3], borderWidth: 1, pointRadius: 0 }] },
     options: chartOpts({ plugins: { legend: { display: true, position: 'top', align: 'start', labels: { boxWidth: 10, boxHeight: 2, font: { size: 11 } } } }, scales: { y: { title: { display: true, text: '°C' } }, x: { grid: { display: false } } } }) });
-  make('climP', { type: 'bar', data: { labels: lab, datasets: [{ label: '降水 mm', data: m.map(x => x.precip_mm), backgroundColor: css('--s3'), borderRadius: 3, maxBarThickness: 16 }] },
-    options: chartOpts({ scales: { y: { title: { display: true, text: '降水 mm／月' } }, x: { grid: { display: false } } } }) });
+  make('climP', { type: 'bar', data: { labels: lab, datasets: [{ label: t('clim.precip'), data: m.map(x => x.precip_mm), backgroundColor: css('--s3'), borderRadius: 3, maxBarThickness: 16 }] },
+    options: chartOpts({ scales: { y: { title: { display: true, text: t('clim.precip.axis') } }, x: { grid: { display: false } } } }) });
   const e = c.extremes, h = c.hours_per_year;
-  $('#climFacts').innerHTML = [['柯本', `${c.koppen} ${c.koppen_name}`], ['ASHRAE 169', c.ashrae], ['年降水', `${fmt(c.map_mm)} mm`], ['平均 RH', `${e.rh_mean}%`],
-    ['99.6% 設計高溫', `${e.t_p99_6} °C`], ['濕球最高', `${e.twb_max} °C`], ['> 35 °C', `${fmt(h.above_35)} h／年`], ['純乾冷極限（45 °C 供水）', `${fmt(c.dry_cooler_limit_hours.t45)} h／年`], ['3D 地景', (ENV[state.site] || {}).label || '–']]
+  $('#climFacts').innerHTML = [[t('clim.koppen'), `${c.koppen} ${koppenName(c)}`], [t('clim.ashrae'), c.ashrae], [t('clim.map'), `${fmt(c.map_mm)} mm`], [t('clim.rh'), `${e.rh_mean}%`],
+    [t('clim.t996'), `${e.t_p99_6} °C`], [t('clim.twb'), `${e.twb_max} °C`], [t('clim.above35'), t('clim.hpy', { h: fmt(h.above_35) })], [t('clim.drylimit'), t('clim.hpy', { h: fmt(c.dry_cooler_limit_hours.t45) })], [t('clim.land'), landName(state.site, (ENV[state.site] || {}).label || '–')]]
     .map(([k, v]) => `<div><span>${k}</span><br>${v}</div>`).join('');
+}
+
+// ---------------------------------------------------------------- 單元（一個 POD 的組成）
+const curView = () => $('#nav .tab.active')?.dataset.tab || 'site';
+function unitFacts() {
+  const racks = 7;
+  $('#unitFacts').innerHTML = [[t('unit.racks'), t('unit.racks.v', { n: racks, gpus: racks * RUBIN.gpus })], [t('unit.compute'), t('unit.compute.v', { pf: fmt(racks * RUBIN.pf_inf) })],
+    [t('unit.it'), t('unit.it.v', { mw: fmt(racks * 136 / 1000, 3) })], [t('unit.cdu'), t('unit.cdu.v')], [t('unit.mod'), t('unit.mod.v')],
+    [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.skid.v')], [t('unit.weight'), '28,500 kg']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 }
 
 // ---------------------------------------------------------------- 主更新
@@ -209,18 +219,17 @@ function update() {
   const key = `${layout.mode}:${layout.n_pods}:${layout.site_m}`;
   const siteChanged = state.site !== lastSite, layoutChanged = key !== lastPods;
   if (siteChanged) { scene.setEnvironment(state.site, CLIM[state.site].lat, !layoutChanged); lastSite = state.site; }   // 換氣候帶 → 換天空、地面、植被
-  if (layoutChanged) { scene.setLayout(layout); scene.frame(); lastPods = key; }
-  $('#sizeFacts').innerHTML = [['DSX POD', `${fmt(layout.n_pods)} 個（${fmt(layout.n_pods * 7)} 櫃）`], ['IT 銘牌', `${fmt(layout.it_mw, 1)} MW`], ['基地', `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
-    ['面積', `${fmt(layout.area_ha, 2)} ha`], ['區塊', layout.n_blocks > 1 ? `${layout.n_blocks} 個（每塊 4 × 14 = 56 POD ≈ 53 MW，各一座變電站）` : '單一陣列']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
-  $('#sizeWarn').textContent = layout.warnings.join('；');
+  if (layoutChanged) { const first = lastPods === -1; scene.setLayout(layout); scene.setView(curView(), { animate: !first, duration: 700 }); lastPods = key; }
+  $('#sizeFacts').innerHTML = [[t('size.pods'), t('size.pods.v', { n: fmt(layout.n_pods), racks: fmt(layout.n_pods * 7) })], [t('size.it'), `${fmt(layout.it_mw, 1)} MW`], [t('size.base'), `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
+    [t('size.area'), `${fmt(layout.area_ha, 2)} ha`], [t('size.blocks'), layout.n_blocks > 1 ? t('size.blocks.v', { n: layout.n_blocks }) : t('size.single')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  $('#sizeWarn').textContent = layout.warnings.map(warnText).join(lang === 'en' ? '; ' : '；');
   const best = presetUI(layout.it_mw);
   if (state.preset && best[state.preset]) { state.cooling = best[state.preset].c; state.supply = best[state.preset].s; segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); store.set('state', state); }
   const all = {}; for (const c of Object.keys(COOL)) all[c] = interp(state.site, c, state.supply, layout.it_mw);
   const m = all[state.cooling]; if (!m) return;
   const reco = recommend(state.site, state.supply, layout.it_mw);
-  $('#reco').innerHTML = `推薦：<b>${COOL[reco.c]}</b>。${reco.why}。`;
   const site = CLIM[state.site];
-  $('#summaryChip').textContent = `${site.name.replace(/（.*）/, '')}（${site.koppen}）・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${COOL[state.cooling]}・${SUP[state.supply]}・PUE ${fmt(m.pue_mean, 3)}`;
+  $('#summaryChip').textContent = `${siteName(state.site, site)} (${site.koppen})・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${t(COOL[state.cooling])}・${SUP[state.supply]}・PUE ${fmt(m.pue_mean, 3)}`;
   kpis(m); yearChart(all); mixChart(m); cmpTable(all, reco); climCharts();
 }
 
@@ -237,7 +246,7 @@ function setMin(which, on) {
   document.body.classList.toggle(which + '-min', on);
   store.set('min', { nav: document.body.classList.contains('nav-min'), data: document.body.classList.contains('data-min') });
   const both = document.body.classList.contains('nav-min') && document.body.classList.contains('data-min');
-  $('#fsBtn').textContent = both ? '⇔ 展開兩側' : '⇔ 收起兩側';
+  $('#fsBtn').textContent = both ? t('fs.expand') : t('fs.collapse');
   if (!on) setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300);
 }
 $('#navCollapse').onclick = () => { if (document.body.classList.contains('mobile')) { document.body.classList.remove('menu-open'); return; } setMin('nav', true); };
@@ -259,8 +268,10 @@ let tipTimer;
 function showTip(x, y) {
   const p = scene.pick(x, y); const tip = $('#tip');
   if (!p) { tip.hidden = true; return; }
-  if (p.kind === 'sub') tip.innerHTML = `<b>變電站${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}</b><br>中壓進線 → 主變壓器 ×2 → 開關室 → 區塊 ${fmt(p.n_pods)} 個 POD<br>IT 銘牌約 ${fmt(p.mw, 1)} MW（示意，未進能耗模型）`;
-  else tip.innerHTML = `<b>POD ${p.index + 1}</b>${layout.n_blocks > 1 ? `・區塊 ${p.block + 1}` : ''}<br>7 櫃・液冷 + 疊放乾冷卻器模組<br>位置 (${fmt(p.x, 1)}, ${fmt(p.y, 1)}) m`;
+  if (p.kind === 'part') tip.innerHTML = `<b>${p.key ? t(p.key, p.p) : p.name}</b><br>${p.key ? t(p.key + '.d', p.p) : p.detail}`;
+  else if (p.kind === 'skid') tip.innerHTML = `<b>${t('tip.skid', { i: p.index + 1 })}</b><br>${t('tip.skid.d', { kva: fmt(Math.ceil(7 * 136 * 1.25 / 100) * 100) })}`;
+  else if (p.kind === 'sub') tip.innerHTML = `<b>${t('tip.sub')}${layout.n_blocks > 1 ? t('tip.block', { b: p.block + 1 }) : ''}</b><br>${t('tip.sub.d', { n: fmt(p.n_pods), mw: fmt(p.mw, 1) })}`;
+  else tip.innerHTML = `<b>${t('tip.pod', { i: p.index + 1 })}</b>${layout.n_blocks > 1 ? t('tip.block', { b: p.block + 1 }) : ''}<br>${t('tip.pod.d', { x: fmt(p.x, 1), y: fmt(p.y, 1) })}`;
   tip.hidden = false; tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - 270)) + 'px'; tip.style.top = Math.max(8, Math.min(y + 14, innerHeight - 100)) + 'px';
 }
 addEventListener('pointermove', e => {
@@ -271,38 +282,40 @@ addEventListener('pointermove', e => {
   }, 40);
 });
 
+let apiGeo = 'box';
 async function checkApi() {
-  let geo = 'box';
-  try { const r = await fetch('api/health', { cache: 'no-store' }); apiOK = r.ok; if (r.ok) geo = (await r.json()).geometry || 'box'; } catch { apiOK = false; }
-  const GEO = { full: '含真實模型（Vertiv CDU / UPS、GB300 機櫃低模，約 30 MB）', vertiv: '含 Vertiv 真實模型', box: '輕量包（方塊；附 fetch_real_geometry.py 可下載 Vertiv 真實模型）' };
+  try { const r = await fetch('api/health', { cache: 'no-store' }); apiOK = r.ok; if (r.ok) apiGeo = (await r.json()).geometry || 'box'; } catch { apiOK = false; }
+  exportUI();
+}
+function exportUI() {
   $('#exportBtn').disabled = !apiOK;
-  $('#exportHint').textContent = apiOK ? `zip：USD（pod.usda／campus.usda、結果層、檢查層）＋ results.json／CSV＋ params.json；${GEO[geo] || GEO.box}。用 USD Composer 開，Window > Collection 可一次選取全部 POD／機櫃／CDU。` : '匯出需要後端：本機執行 .venv\\Scripts\\python.exe -m dsxpod.server（部署版走 /api/export 函式）。';
+  $('#exportHint').textContent = apiOK ? t('export.hint', { geo: t('export.geo.' + apiGeo) }) : t('export.noapi');
 }
 $('#exportBtn').onclick = async () => {
-  const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = '產生中…（約 3–10 秒）';
+  const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = t('export.busy');
   try {
     const body = { site: state.site, cooling: state.cooling, supply: state.supply, ...(state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
     const r = await fetch('api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(await r.text());
     const blob = await r.blob(); const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'dsx_pod_export.zip';
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    $('#exportHint').textContent = `已下載 ${name}（${fmt(blob.size / 1024)} KB）`;
-  } catch (e) { $('#exportHint').textContent = '匯出失敗：' + e.message; }
+    $('#exportHint').textContent = t('export.done', { name, kb: fmt(blob.size / 1024) });
+  } catch (e) { $('#exportHint').textContent = t('export.fail') + e.message; }
   btn.textContent = old; btn.disabled = !apiOK;
 };
 
 // ---------------------------------------------------------------- 啟動
 // ---------------------------------------------------------------- 載入進度
 // 權重：程式庫（app.js 能跑就代表已載完）、氣候摘要、結果表、兩個 GLB、建場景。CDN 可能壓縮傳輸 → 總量取 content-length 或預估值，進度一律夾在 0–1。
-const LOAD = { libs: [0.12, 1], climate: [0.03, 0], grid: [0.27, 0], 'container.glb': [0.15, 0], 'cooler_module.glb': [0.25, 0], build: [0.18, 0] };
-const EST = { climate: 15e3, grid: 461e3, 'container.glb': 279e3, 'cooler_module.glb': 503e3 };
-const MSG = { climate: '載入氣候資料…', grid: '載入能耗結果表…', 'container.glb': '載入貨櫃模型…', 'cooler_module.glb': '載入散熱模組模型…', build: '建立場景（地景、道路、變電站）…' };
+const LOAD = { libs: [0.12, 1], climate: [0.03, 0], grid: [0.27, 0], 'container.glb': [0.13, 0], 'cooler_module.glb': [0.24, 0], 'power_skid.glb': [0.04, 0], build: [0.17, 0] };
+const EST = { climate: 15e3, grid: 461e3, 'container.glb': 224e3, 'cooler_module.glb': 503e3, 'power_skid.glb': 83e3 };
+const MSG = { climate: 'load.climate', grid: 'load.grid', 'container.glb': 'load.container', 'cooler_module.glb': 'load.cooler', 'power_skid.glb': 'load.skid', build: 'load.build' };
 function progress(key, frac) {
   LOAD[key][1] = Math.max(LOAD[key][1], Math.min(1, frac || 0));
-  const t = Object.values(LOAD).reduce((s, [w, f]) => s + w * f, 0);
-  const bar = $('.ld-bar'); bar.classList.add('det'); $('#ldFill').style.width = `${(t * 100).toFixed(1)}%`;
-  $('#ldPct').textContent = `${Math.floor(t * 100)}%`; $('#loading').setAttribute('aria-valuenow', Math.floor(t * 100));
-  const busy = Object.keys(LOAD).find(k => LOAD[k][1] < 1); if (busy) $('#ldMsg').textContent = MSG[busy] || '';
+  const tot = Object.values(LOAD).reduce((s, [w, f]) => s + w * f, 0);
+  const bar = $('.ld-bar'); bar.classList.add('det'); $('#ldFill').style.width = `${(tot * 100).toFixed(1)}%`;
+  $('#ldPct').textContent = `${Math.floor(tot * 100)}%`; $('#loading').setAttribute('aria-valuenow', Math.floor(tot * 100));
+  const busy = Object.keys(LOAD).find(k => LOAD[k][1] < 1); if (busy) $('#ldMsg').textContent = MSG[busy] ? t(MSG[busy]) : '';
 }
 async function fetchJSON(url, key) {
   const r = await fetch(url); if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
@@ -318,19 +331,27 @@ const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0
 (async function main() {
   progress('libs', 1);
   [CLIM, GRID] = await Promise.all([fetchJSON('data/climate_summary.json', 'climate'), fetchJSON('data/results_grid.json', 'grid')]);
-  scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto });
+  scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto, labels: { site: (l, w, ha) => t('scene.site', { l, w, ha }), use: (l, w) => t('scene.use', { l, w }) } });
   await scene.load('assets/', (f, loaded, total) => progress(f, loaded / Math.max(total || EST[f], loaded * 1.05)));
-  progress('container.glb', 1); progress('cooler_module.glb', 1); progress('build', 0.15); await paint();
-  const qualityUI = () => { $$('#qualitySeg button').forEach(b => { b.classList.toggle('on', b.dataset.q === scene.quality); b.onclick = () => { store.set('quality', b.dataset.q); scene.setQuality(b.dataset.q); qualityUI(); }; });
-    $('#qualityHint').textContent = scene.quality === 'lite' ? '無陰影、簡化材質與植被' : '陰影、天空光、完整植被'; };
-  scene.onQualityChange = (q, why) => { qualityUI(); if (why) $('#qualityHint').textContent = why; };
+  progress('container.glb', 1); progress('cooler_module.glb', 1); progress('power_skid.glb', 1); progress('build', 0.15); await paint();
+  const qualityUI = () => $$('#qualitySeg button').forEach(b => { b.classList.toggle('on', b.dataset.q === scene.quality); b.onclick = () => { store.set('quality', b.dataset.q); scene.setQuality(b.dataset.q); qualityUI(); }; });
+  let toastTimer;   // 自動降畫質時在工具列短暫提示
+  scene.onQualityChange = (q, why) => { qualityUI(); if (why && why.fps) { const el = $('#qualityHint'); el.textContent = t('quality.auto', why); el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 6000); } };
   qualityUI();
+  // 語言切換：靜態文字重套，動態文字全部重畫（場址卡片、單元、結果、匯出說明、3D 基地標籤）
+  const langUI = () => $$('#langSeg button').forEach(b => { b.classList.toggle('on', b.dataset.lang === lang); b.onclick = () => { if (!setLang(b.dataset.lang)) return; langUI(); siteCards(); unitFacts(); setMin('nav', document.body.classList.contains('nav-min')); update(); exportUI(); scene.setLayout(layout); }; });
+  langUI();
   tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply');
+  // 分鏡：每個設定分頁一個鏡頭（場址 = 全景、規模 = 整個基地、散熱 = 散熱模組近景、單元 = 貨櫃剖面）
+  $$('#nav .tab').forEach(t => t.addEventListener('click', () => { scene.setView(t.dataset.tab); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === 'unit')); }));
+  $$('#unitSeg button').forEach(b => b.onclick = () => { $$('#unitSeg button').forEach(x => x.classList.toggle('on', x === b)); scene.setView(b.dataset.view); });
+  unitFacts();
   progress('build', 0.4); await paint();
-  update(); scene.frame();
+  update();
   progress('build', 0.9); await paint();
-  if (Q.get('tab')) $(`#data .tab[data-tab="${Q.get('tab')}"]`)?.click();
+  if (Q.get('tab')) $(`#data .tab[data-tab="${{ year: 'energy', mix: 'energy' }[Q.get('tab')] || Q.get('tab')}"]`)?.click();
   if (Q.get('nav')) $(`#nav .tab[data-tab="${Q.get('nav')}"]`)?.click();
+  if (Q.get('cam')) { scene.setView(Q.get('cam'), { animate: false }); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === Q.get('cam'))); }   // 分享 / 測試：直接指定鏡頭（site / size / cool / unit / skid）
   if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
   scene.setVisible({ shell: true, cooler: true, rack: false });
   if (Q.get('panel') === 'menu') document.body.classList.add('menu-open'); if (Q.get('panel') === 'sheet') document.body.classList.add('sheet-open');   // 測試 / 分享用
@@ -339,5 +360,5 @@ const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0
   $('#loading').classList.add('done'); checkApi();
 })().catch(e => {                                            // 載入失敗：進度條轉紅並顯示原因
   console.error(e); $('#loading').classList.add('err'); $('.ld-bar').classList.add('det');
-  $('#ldMsg').textContent = '載入失敗：' + (e && e.message || e); $('#ldPct').textContent = '';
+  $('#ldMsg').textContent = t('load.fail') + (e && e.message || e); $('#ldPct').textContent = '';
 });

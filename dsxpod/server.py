@@ -34,6 +34,8 @@ class Req(BaseModel):
     supply: str = "t45"
     include_proxy: bool = False
     geometry: Optional[str] = None          # box / vertiv / full；None = 這台伺服器能打包的最完整等級
+    product: str = "dsx_pod"                # dsx_pod / gadu
+    sku: Optional[str] = None               # GADU 機櫃型號（products.py 的鍵）
 
 
 @app.get("/api/health")
@@ -51,7 +53,7 @@ def health():
 def export(req: Req):
     try:
         from .export import export_package
-        data, meta = export_package(req.site, mw=req.mw, site_l=req.site_l, site_w=req.site_w, cooling=req.cooling, supply=req.supply, include_proxy=req.include_proxy or None, geometry=req.geometry)
+        data, meta = export_package(req.site, mw=req.mw, site_l=req.site_l, site_w=req.site_w, cooling=req.cooling, supply=req.supply, include_proxy=req.include_proxy or None, geometry=req.geometry, product=req.product, sku=req.sku)
     except (AssertionError, ValueError) as e:
         raise HTTPException(400, str(e))
     except Exception as e:                                   # 回傳錯誤摘要（最後幾層 traceback），部署環境看不到日誌時好診斷
@@ -59,7 +61,7 @@ def export(req: Req):
         tb = traceback.format_exc().strip().splitlines()[-6:]
         return JSONResponse({"error": f"{type(e).__name__}: {e}", "trace": tb}, status_code=500)
     size = f"{req.mw:g}MW" if req.mw else f"{req.site_l:g}x{req.site_w:g}m"
-    name = f"dsx_pod_{req.site}_{size}_{req.cooling}_{req.supply}.zip"
+    name = f"{req.product}{'_' + req.sku if req.product == 'gadu' and req.sku else ''}_{req.site}_{size}_{req.cooling}_{req.supply}.zip"
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"', "X-Export-Meta": str(meta).replace("\n", " ").encode("ascii", "replace").decode("ascii")})
 
 

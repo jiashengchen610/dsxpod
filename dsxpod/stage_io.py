@@ -55,7 +55,7 @@ def set_variants(stage, session=True, **sel):
         else: pod.GetVariantSets().GetVariantSet(k).SetVariantSelection(v)
 
 
-EQUIP_PARENTS = ("Racks", "Cooling", "Equipment", "CoolerModule", "CoolerYard", "Utility")
+EQUIP_PARENTS = ("Racks", "Cooling", "Equipment", "CoolerModule", "CoolerYard", "Utility", "PowerSkid", "Chillers")
 
 
 def _children_named(stage, root_path, prefix):
@@ -80,6 +80,10 @@ def stage_to_params(stage, pod_path=POD_PATH) -> Params:
     p = make_params(sel.get("cooling", "dry_only"), supply_c)
     p.n_pods = int(_attr(pod, "aif:spec:podCount", _attr(pod, "aif:spec:duCount", 1)))
     src = p.notes
+    # ---- 產品 / SKU / 冷卻路線 ----
+    p.product = str(_attr(pod, "aif:core:product", "dsx_pod")); p.sku = str(_attr(pod, "aif:spec:sku", p.sku))
+    p.cooling_mode = str(_attr(pod, "aif:spec:coolingMode", "warm_water_dry"))
+    src.append(f"product={p.product} sku={p.sku} cooling_mode={p.cooling_mode} ← Plant aif:core:product / aif:spec:sku / aif:spec:coolingMode")
 
     # ---- 機櫃 ----
     racks = _children_named(stage, pod_path, "Rack_")
@@ -109,7 +113,9 @@ def stage_to_params(stage, pod_path=POD_PATH) -> Params:
         src.append(f"racks ← 後備 {p.racks}（POD 底下沒有 Rack_* prim）")
 
     # ---- 契約上的係數 ----
+    from .variants import CONTRACT_PRODUCTS
     for param, prim_rel, name, doc in USD_CONTRACT:
+        if param in CONTRACT_PRODUCTS and p.product not in CONTRACT_PRODUCTS[param]: continue   # 別的產品的係數
         prim = contract_prim(stage, pod_path, prim_rel)
         v = _attr(prim, name)
         if v is not None:
@@ -164,7 +170,7 @@ def stage_to_params(stage, pod_path=POD_PATH) -> Params:
             src.append(f"recirculation_k={p.recirculation_k:g} ← 後備（placement 字串）")
     chillers = _children_named(stage, pod_path, "Chiller_")
     p.has_chiller = any(c.IsActive() for c in chillers)
-    src.append(f"has_chiller={p.has_chiller} ← Utility/Chiller_01 active")
+    src.append(f"has_chiller={p.has_chiller} ← {'Chillers/Chiller_* active（' + str(len(chillers)) + ' 台）' if p.cooling_mode == 'chilled_water' else 'Utility/Chiller_01 active'}")
 
     # ---- UPS：損失 = (1 − 雙轉換效率) + 配電損失 ----
     upss = _children_named(stage, pod_path, "UPS_"); ups = upss[0] if upss else Usd.Prim()

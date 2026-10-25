@@ -16,7 +16,8 @@ from pxr import Usd, Sdf
 from . import sizing, usd_out
 from .stage_io import stage_to_params, set_variants, current_variants, fallback_notes, write_results
 from .layout import analyze, write_checks
-from .variants import COOLING, SUPPLY_TEMP, SUPPLY_LABEL
+from .variants import COOLING, SUPPLY_TEMP, SUPPLY_LABEL, coerce_knobs
+from .products import PRODUCTS, spec as product_spec
 from .weather import SITES
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +27,7 @@ VERTIV_ASSETS = ("XDU2300AA0S000F", "MCV430_6FAN", "APM2")
 
 
 # 真實幾何：Vertiv（Hugging Face Vertiv/simready-assets，CC-BY-4.0，可再散布）與 GB300 低模（NVIDIA DSX 內容包，只在本機匯出）
-VERTIV_FULL = ("XDU2300AA0S000F", "APM2")              # CDU、UPS；乾冷卻器疊放時外觀用生成的散熱模組，不需要 MCV430 完整幾何
+VERTIV_FULL = ("XDU2300AA0S000F",)                     # CDU；UPS 在電力模組外殼內（看不到）、乾冷卻器疊放時外觀用生成的散熱模組，都不需要完整幾何
 ON_VERCEL = bool(os.environ.get("VERCEL"))
 
 
@@ -59,7 +60,7 @@ import json, urllib.request, urllib.parse
 from pathlib import Path
 HERE = Path(__file__).resolve().parent / "data" / "simready_assets" / "vertiv"
 UA = {"User-Agent": "Mozilla/5.0"}
-for asset in ("XDU2300AA0S000F", "APM2"):
+for asset in ("XDU2300AA0S000F",):
     lst = json.load(urllib.request.urlopen(urllib.request.Request(f"https://huggingface.co/api/datasets/Vertiv/simready-assets/tree/main/{asset}?recursive=true", headers=UA), timeout=60))
     for f in (x for x in lst if x["type"] == "file"):
         out = HERE / asset / "full" / f["path"][len(asset) + 1:]
@@ -72,10 +73,13 @@ print("完成。Composer 開 pod.usda → 選 /World/Plant → Property 面板 V
 '''
 
 
-def grid_lookup(site, cooling, supply, mw):
-    """預算結果表在 log(MW) 上線性內插（沒有氣象快取時用）。"""
-    g = json.loads(GRID.read_text(encoding="utf-8"))
-    rows = sorted([r for r in g["rows"] if r["site"] == site and r["cooling"] == cooling and r["supply"] == supply], key=lambda r: r["mw"])
+def grid_lookup(site, cooling, supply, mw, product="dsx_pod", sku=None):
+    """預算結果表在 log(MW) 上線性內插（沒有氣象快取時用）。GADU 讀 results_grid_gadu.json，依 SKU 篩。"""
+    path = GRID if product == "dsx_pod" else GRID.with_name("results_grid_gadu.json")
+    if not path.exists(): raise ValueError(f"這台伺服器沒有 {product} 的結果表")
+    g = json.loads(path.read_text(encoding="utf-8"))
+    rows = sorted([r for r in g["rows"] if r["site"] == site and r["cooling"] == cooling and r["supply"] == supply
+                   and r.get("product", "dsx_pod") == product and (product == "dsx_pod" or r.get("sku") == sku)], key=lambda r: r["mw"])
     if not rows: raise ValueError("結果表沒有這個組合")
     x = math.log(max(rows[0]["mw"], min(rows[-1]["mw"], mw)))
     for a, b in zip(rows, rows[1:]):
@@ -85,13 +89,16 @@ def grid_lookup(site, cooling, supply, mw):
     return rows[-1] if x >= math.log(rows[-1]["mw"]) else rows[0]
 
 
-def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry_only", supply="t45", include_proxy=None, geometry=None):
-    """geometry：box / vertiv / full；None = 這台機器能打包的最完整等級（本機 full、Vercel box）。include_proxy 是舊參數（True ≈ full）。"""
-    assert site in SITES and cooling in COOLING and supply in SUPPLY_TEMP
+def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry_only", supply="t45", include_proxy=None, geometry=None, product="dsx_pod", sku=None):
+    """geometry：box / vertiv / full；None = 這台機器能打包的最完整等級（本機 full、Vercel box）。include_proxy 是舊參數（True ≈ full）。
+    product：dsx_pod / gadu；sku：GADU 的機櫃型號（products.py）。"""
+    assert site in SITES and cooling in COOLING and supply in SUPPLY_TEMP and product in PRODUCTS
+    cooling, supply = coerce_knobs(product, cooling, supply)
+    pr, sk = product_spec(product, sku); sku = sku or next(iter(pr["skus"]))
     avail = available_geometry(); order = ["box", "vertiv", "full"]
     if geometry is None: geometry = "full" if include_proxy else avail
     geometry = order[min(order.index(geometry if geometry in order else "box"), order.index(avail))]
-    layout = sizing.plan(mw=mw, site_l=site_l, site_w=site_w) if (mw is not None or (site_l and site_w)) else sizing.plan(mw=1)
+    layout = sizing.plan(mw=mw, site_l=site_l, site_w=site_w, product=product, sku=sku) if (mw is not None or (site_l and site_w)) else sizing.plan(mw=1, product=product, sku=sku)
     tmp = Path(tempfile.mkdtemp(prefix="dsxpod_export_")); pkg = tmp / "dsx_pod_export"; d = pkg / "data"
     t0 = time.time()
     try:
@@ -110,7 +117,7 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
             if abs(scale - 1) > 1e-9: rows = [dict(r, **{k: round(r[k] * scale, 2) for k in SCALE_KEYS if k in r}) for r in rows]
             sm = summarize(rows); source = "20-year hourly simulation (ERA5 2005-2024)"
         else:
-            g = grid_lookup(site, cooling, supply, layout["it_mw"])
+            g = grid_lookup(site, cooling, supply, layout["it_mw"], product=product, sku=sku)
             rows = [dict(year=int(y), pue=v) for y, v in g["pue_by_year"].items()]
             sm = dict(pue_mean=g["pue_mean"], pue_p90=g["pue_p90"], pue_min=g["pue_min"], pue_max=g["pue_max"], unmet_h_mean=g["unmet_h"],
                       unmet_h_max=g["unmet_h_max"], chiller_mwh_mean=g["chiller_mwh"], water_m3_mean=g["water_m3"], facility_mwh_mean=g["facility_mwh"],
@@ -126,6 +133,7 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
             pass
         st.SetEditTarget(Usd.EditTarget(root)); root.Save()
         inputs = dict(site=site, site_name=SITES[site]["name"], mw=mw, site_l=site_l, site_w=site_w, cooling=cooling, cooling_label=COOLING[cooling]["label"],
+                      product=product, product_name=pr["name"], sku=sku, sku_name=sk["name"],
                       supply=supply, supply_label=SUPPLY_LABEL[supply])
         lay = {k: v for k, v in layout.items() if k != "pods"}
         result = dict(inputs=inputs, layout=lay, summary=sm, annual=rows, result_source=source,
@@ -142,11 +150,12 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
         main = "data/twin/campus.usda" if layout["mode"] == "campus" else "data/twin/pod.usda"
         (pkg / "README.txt").write_text(f"""DSX POD 場址模型匯出（{result['generated']}）
 
-場址：{SITES[site]['name']}　規模：{layout['n_pods']} 個 POD（{layout['it_mw']:g} MW IT 銘牌，{layout['n_blocks']} 區塊）　散熱：{COOLING[cooling]['label']}　供水：{SUPPLY_LABEL[supply]}
+產品：{pr['name']}（{sk['name']}）
+場址：{SITES[site]['name']}　規模：{layout['n_pods']} 個單位（{layout['it_mw']:g} MW IT 銘牌，{layout['n_blocks']} 區塊）　散熱：{COOLING[cooling]['label']}　供水：{SUPPLY_LABEL[supply]}
 PUE 20 年均 {sm['pue_mean']:.3f}　每年排不掉熱 {sm['unmet_h_mean']:.0f} 小時　冰水機 {sm['chiller_mwh_mean']:,.0f} MWh/年　用水 {sm['water_m3_mean']:,.0f} m³/年
 
 開啟：用 USD Composer 開 {main}（upAxis Z、公尺）。/World/Plant 上有 VariantSet cooling、supply_temp、geometry；/World/Site 有 site。
-幾何：目前 geometry = {geometry}（box = 方塊；vertiv = Vertiv CDU / UPS 真實模型；full = 再加 GB300 機櫃低模）。{'這份是輕量包：執行 python fetch_real_geometry.py 下載 Vertiv 模型後，把 geometry 切成 vertiv。' if geometry == 'box' else ''}
+幾何：目前 geometry = {geometry}（box = 方塊；vertiv = Vertiv CDU 真實模型；full = 再加 GB300 機櫃低模）。{'這份是輕量包：執行 python fetch_real_geometry.py 下載 Vertiv 模型後，把 geometry 切成 vertiv。' if geometry == 'box' else ''}
 一次選取：Window > Collection，/World/Plant 下有 pods（完整單元）、shells、coolerModules、dryCoolers、racks、cdus、utility，右鍵 Select Contents。
 出處：Vertiv 模型與規格層來自 Hugging Face Vertiv/simready-assets（CC-BY-4.0，© Vertiv）；GB300 規格層與低模來自 NVIDIA DSX Content Pack（NGC，依其授權條款，僅供評估）。
 結果來源：{source}

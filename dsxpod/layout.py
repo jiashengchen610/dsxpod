@@ -17,7 +17,7 @@ from pxr import Usd, UsdGeom, Sdf, Gf
 
 ROOT = Path(__file__).resolve().parent.parent
 POD_PATH = "/World/Plant"     # 步驟 8：廠區（底下 POD_01..n 貨櫃）
-EQUIP_PARENTS = ("Racks", "Cooling", "Equipment", "CoolerModule", "CoolerYard", "Utility")
+EQUIP_PARENTS = ("Racks", "Cooling", "Equipment", "CoolerModule", "CoolerYard", "Utility", "PowerSkid", "Chillers")
 CHECKS_PATH = "/World/Checks"
 CHECKS_LAYER = ROOT / "data" / "twin" / "pod_checks.usda"
 
@@ -209,6 +209,7 @@ def analyze(stage, pod_path=POD_PATH):
     pod = stage.GetPrimAtPath(pod_path); util = float(_attr(pod, "aif:spec:itUtilization", 0.9))
     racks = [e for e in equip if e.prim.GetName().startswith("Rack")]
     q_liq = sum(float(_attr(r.prim, "aif:spec:liquidCooling", 116.0)) for r in racks) * util
+    q_total = sum((float(_attr(r.prim, 'aif:spec:maxPowerDcTdp', 0) or 0) for r in racks)) * util or q_liq   # 冰水機容量用（液冷 + 氣冷）
     import collections
     n_by_class = collections.Counter(e.prim.GetName().rsplit("_", 1)[0] for e in equip)
     seen = set()
@@ -220,11 +221,14 @@ def analyze(stage, pod_path=POD_PATH):
             cap = _attr(e.prim, "aif:spec:maximumCoolingCapacity") or _attr(e.prim, "aif:spec:nominalCoolingCapacity"); label = "aif:spec:maximumCoolingCapacity"
         elif e.prim.GetName().startswith("CDU"):
             cap = _attr(e.prim, "aif:spec:nominalCoolingCapacity"); label = "aif:spec:nominalCoolingCapacity"
+        elif e.prim.GetName().startswith("Chiller") and _attr(e.prim, "aif:spec:nominalCoolingCapacity"):
+            cap = _attr(e.prim, "aif:spec:nominalCoolingCapacity"); label = "aif:spec:nominalCoolingCapacity"
         if cap:
-            n = math.ceil(q_liq / float(cap)); have = n_by_class[e.prim.GetName().rsplit("_", 1)[0]]
+            load = q_total if e.prim.GetName().startswith("Chiller") else q_liq        # 冰水機接全部排熱（液冷 + 氣冷）
+            n = math.ceil(load / float(cap)); have = n_by_class[e.prim.GetName().rsplit("_", 1)[0]]
             seen.add(cls)
-            out["capacity"].append(dict(subject=e.path, capacity_kw=float(cap), load_kw=round(q_liq, 1), units_needed=n, units_present=have, source=label,
-                                        ok=have >= n, message=f"{cls}: {q_liq:.0f} kW liquid heat vs {float(cap):.0f} kW per unit → {n} unit(s) needed, {have} present"))
+            out["capacity"].append(dict(subject=e.path, capacity_kw=float(cap), load_kw=round(load, 1), units_needed=n, units_present=have, source=label,
+                                        ok=have >= n, message=f"{cls}: {load:.0f} kW heat vs {float(cap):.0f} kW per unit → {n} unit(s) needed, {have} present"))
     out["summary"] = dict(violations=len(out["violations"]), racks=len(racks), q_liq_kw=round(q_liq, 1),
                           capacity_short=[c["subject"] for c in out["capacity"] if not c["ok"]])
     return out

@@ -154,6 +154,20 @@ def Xform "DSXPOD_CoolerModule" (
                 token outputs:surface
             }
         }
+
+        def Material "Grey"
+        {
+            token outputs:surface.connect = </DSXPOD_CoolerModule/Looks/Grey/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.84, 0.85, 0.85)
+                float inputs:metallic = 0.25
+                float inputs:roughness = 0.5
+                token outputs:surface
+            }
+        }
     }
 
     def Xform "Geometry"

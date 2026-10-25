@@ -33,6 +33,8 @@ from .variants import (Params, USD_CONTRACT, COOLING, SUPPLY_TEMP, RACKS_PER_POD
                        RACK_KW_NAMEPLATE, RACK_KW_LIQUID, RACK_KW_AIR)
 from .weather import SITES
 from . import sizing
+from . import products as PRODUCTS_MOD
+from .variants import COOLING_BY_PRODUCT, SUPPLY_BY_PRODUCT
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "data" / "twin"
@@ -48,19 +50,21 @@ INCLUDE_PROXY = True                       # 機櫃低模 payload（匯出輕量
 def configure(data_root=None, include_proxy=True):
     """把建模器的輸出與資產根目錄指到 data_root（其下要有 twin/、assets/dsx_pod/、simready_assets/ 的相同結構）。
     匯出可攜套件用：在暫存資料夾複製資產後呼叫，USD 內的相對路徑在 zip 裡也能解析。data_root=None 還原成 repo 的 data/。"""
-    global OUT_DIR, OUT, VERTIV, GB300, ASSETS, CONTAINER_ASSET, COOLER_ASSET, CAMPUS, INCLUDE_PROXY
+    global OUT_DIR, OUT, VERTIV, GB300, ASSETS, CONTAINER_ASSET, COOLER_ASSET, SKID_ASSET, CHILLER_ASSET, CAMPUS, INCLUDE_PROXY
     d = Path(data_root) if data_root else ROOT / "data"
     OUT_DIR = d / "twin"; OUT = OUT_DIR / "pod.usda"; CAMPUS = OUT_DIR / "campus.usda"
     try: OUT_DIR.mkdir(parents=True, exist_ok=True)   # 還原到 repo data/ 時，部署環境唯讀 → 略過（匯出只寫暫存資料夾）
     except OSError: pass
     VERTIV = d / "simready_assets" / "vertiv"; GB300 = d / "simready_assets" / "nvidia" / "GB300"
-    ASSETS = d / "assets" / "dsx_pod"; CONTAINER_ASSET = ASSETS / "container.usda"; COOLER_ASSET = ASSETS / "cooler_module.usda"
+    ASSETS = d / "assets" / "dsx_pod"; CONTAINER_ASSET = ASSETS / "container.usda"; COOLER_ASSET = ASSETS / "cooler_module.usda"; SKID_ASSET = ASSETS / "power_skid.usda"; CHILLER_ASSET = ASSETS / "chiller.usda"
     INCLUDE_PROXY = include_proxy
 
 PLANT = "/World/Plant"
 ASSETS = ROOT / "data" / "assets" / "dsx_pod"                 # dsxpod/assetgen.py 生成（USD + GLB 同源）
 CONTAINER_ASSET = ASSETS / "container.usda"
 COOLER_ASSET = ASSETS / "cooler_module.usda"
+SKID_ASSET = ASSETS / "power_skid.usda"
+CHILLER_ASSET = ASSETS / "chiller.usda"
 CONTAINER = (12.192, 2.438, 2.896)          # ISO 40 ft high cube 外尺寸（m）
 WALL_T = 0.04
 RACK_SIZE = (0.6, 1.2, 2.3)
@@ -88,7 +92,17 @@ LOOKS = {
     "Deck":           dict(color=(0.35, 0.36, 0.38), roughness=0.7,  metallic=0.6),
     "Louver":         dict(color=(0.85, 0.25, 0.15), roughness=0.6,  metallic=0.5),
     "Pad":            dict(color=(0.55, 0.55, 0.52), roughness=0.95, metallic=0.0),
+    "Panel":          dict(color=(0.82, 0.83, 0.82), roughness=0.5,  metallic=0.3),
+    "FireRed":        dict(color=(0.75, 0.08, 0.06), roughness=0.4,  metallic=0.3),
+    "Pipe":           dict(color=(0.42, 0.44, 0.47), roughness=0.4,  metallic=0.8),
 }
+
+# 貨櫃內排列（照 NVIDIA Vera Rubin DSX POD 官方剖面圖）：一排靠南側維修門，正面朝南（−y）。
+# 西端：配電盤 + 2 支潔淨氣體滅火鋼瓶；3 櫃 + 列間 CDU + 4 櫃；天花板紅色消防管、北側上方兩根供回水主管。
+# three.js 的 web/js/scene.js（INTERIOR）照這裡的數字畫，改一邊就要改另一邊。
+INTERIOR = dict(panel_x=0.15, panel_size=(0.6, 0.45, 2.0), bottles_x=(0.98, 1.38), bottle_r=0.17, bottle_h=1.5,
+                rack_x=(1.8, 2.4, 3.0, 4.95, 5.55, 6.15, 6.75), cdu_x=3.65,
+                fire_pipe=dict(y=1.30, z=2.70, r=0.05), headers=dict(y=(1.85, 2.15), z=2.45, r=0.12))
 
 
 # ---------------------------------------------------------------- 工具
@@ -220,6 +234,9 @@ def author_collections(stage):
         "dryCoolers": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("DryCooler_")],
         "racks": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("Rack_")],
         "cdus": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("CDU_")],
+        "powerSkids": [c.GetPath().AppendChild("PowerSkid") for c in pods if c.GetChild("PowerSkid")],
+        "chillers": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("Chiller_") and q.GetParent().GetName() == "Chillers"],
+        "inRowCoolers": [q.GetPath() for q in Usd.PrimRange(plant) if q.GetName().startswith("InRowCooler_")],
         "utility": [q.GetPath() for q in plant.GetChild("Utility").GetChildren()] if plant.GetChild("Utility") else [],
     }
     for name, paths in sets.items():
@@ -270,9 +287,15 @@ hall_dims = plant_dims   # 舊名相容
 
 
 def rack_positions():
-    """貨櫃內 7 櫃一排，正面朝南側維修門（−y），從西端 CDU 後面排起；回傳 (x, y)（貨櫃局部座標、左下角）。"""
-    x0 = 0.3 + EQUIP["CDU"]["size"][0] + 1.0
-    return [(x0 + i * RACK_SIZE[0], WALL_T + 0.02) for i in range(RACKS_PER_POD)]
+    """貨櫃內 7 櫃（3 + 列間 CDU + 4），正面朝南側維修門（−y）；回傳 (x, y)（貨櫃局部座標、左下角）。"""
+    return [(x, WALL_T + 0.02) for x in INTERIOR["rack_x"][:RACKS_PER_POD]]
+
+
+def cylinder(stage, path, r, h, pos, axis="Z", look=None, looks=None):
+    c = UsdGeom.Cylinder.Define(stage, path); c.CreateRadiusAttr(r); c.CreateHeightAttr(h); c.CreateAxisAttr(axis)
+    c.AddTranslateOp().Set(Gf.Vec3d(*pos))
+    if look: c.GetDisplayColorAttr().Set([Gf.Vec3f(*LOOKS[look]["color"])]); bind(c.GetPrim(), looks[look])
+    return c.GetPrim()
 
 
 # ---------------------------------------------------------------- 單一貨櫃
@@ -302,8 +325,23 @@ def build_pod(stage, path, origin, looks, heat_rejection, n_coolers):
 
     # 設備：CDU 在西端
     eq = UsdGeom.Scope.Define(stage, f"{path}/Equipment").GetPrim(); Usd.ModelAPI(eq).SetKind(Kind.Tokens.group)
-    c = box(stage, f"{path}/Equipment/CDU_01", EQUIP["CDU"]["size"], (0.3, (W - EQUIP['CDU']['size'][1]) / 2, 0.10), ("CDU", looks["CDU"]), Kind.Tokens.component)
-    add_vertiv_props(c, EQUIP["CDU"]["asset"]); attr(c, "layout:facing", Sdf.ValueTypeNames.Token, "+x")
+    c = box(stage, f"{path}/Equipment/CDU_01", EQUIP["CDU"]["size"], (INTERIOR["cdu_x"], WALL_T + 0.02, 0.10), ("CDU", looks["CDU"]), Kind.Tokens.component)
+    add_vertiv_props(c, EQUIP["CDU"]["asset"]); attr(c, "layout:facing", Sdf.ValueTypeNames.Token, "-y", "in-row between rack groups (3 + CDU + 4)")
+    # 西端：配電盤、潔淨氣體滅火鋼瓶；天花板消防管與供回水主管（外觀，依官方剖面圖；不進能耗模型）
+    pnl = box(stage, f"{path}/Equipment/Electrical_01", INTERIOR["panel_size"], (INTERIOR["panel_x"], WALL_T + 0.02, 0.10), ("Panel", looks["Panel"]), Kind.Tokens.component)
+    attr(pnl, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Electrical distribution panel")
+    fs = UsdGeom.Xform.Define(stage, f"{path}/Equipment/FireSuppression").GetPrim(); Usd.ModelAPI(fs).SetKind(Kind.Tokens.component)
+    attr(fs, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Clean-agent fire suppression (2 cylinders + ceiling pipe)")
+    for k, bx in enumerate(INTERIOR["bottles_x"], 1):
+        cylinder(stage, f"{path}/Equipment/FireSuppression/Cylinder_{k:02d}", INTERIOR["bottle_r"], INTERIOR["bottle_h"],
+                 (bx, WALL_T + 0.25, 0.10 + INTERIOR["bottle_h"] / 2), look="FireRed", looks=looks)
+    fp = INTERIOR["fire_pipe"]
+    cylinder(stage, f"{path}/Equipment/FireSuppression/CeilingPipe", fp["r"], L - 0.6, (L / 2, fp["y"], fp["z"]), axis="X", look="FireRed", looks=looks)
+    hd = INTERIOR["headers"]
+    pip = UsdGeom.Xform.Define(stage, f"{path}/Equipment/Headers").GetPrim(); Usd.ModelAPI(pip).SetKind(Kind.Tokens.component)
+    attr(pip, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Facility water supply / return headers (TCS loop to stacked dry coolers)")
+    for nm, y in zip(("Supply", "Return"), hd["y"]):
+        cylinder(stage, f"{path}/Equipment/Headers/{nm}", hd["r"], L - 0.4, (L / 2, y, hd["z"]), axis="X", look="Pipe", looks=looks)
     add_full_geometry(c, VERTIV / EQUIP["CDU"]["asset"] / "full" / "simready_usd" / f"{EQUIP['CDU']['asset']}_main.usd", EQUIP["CDU"]["size"],
                       note="Vertiv XDU2300 spec layer", source="vertiv")
 
@@ -320,6 +358,123 @@ def build_pod(stage, path, origin, looks, heat_rejection, n_coolers):
         for k in range(n_coolers):
             make_drycooler(stage, f"{path}/CoolerModule/DryCooler_{k+1:02d}", (x0 + k * (sx + COOLER_GAP_X), (W - EQUIP['DryCooler']['size'][1]) / 2, H), looks, "stacked",
                            enclosed=COOLER_ASSET.exists())
+    add_power_skid(stage, path, looks, L, W, RACKS_PER_POD * RACK_KW_NAMEPLATE, dc=True)
+    return pp
+
+
+def add_power_skid(stage, path, looks, L, W, it_kw, dc=True):
+    """每個單位東端一個電力模組：DSX POD = 800 VDC 電力中心；GADU = 交流 power skid（變壓器 + UPS）。外殼同一個程序化資產。"""
+    # 800 VDC 電力中心（NVIDIA GTC 影片：800 VDC Power Center，同樣功率少用 45% 銅）：接在貨櫃東端，地面線槽送 800 V 直流到機櫃。
+    # 外型 = 程式生成的 20 ft 淺色櫃；內容用規格 prim：UPS_01（電力轉換效率；目前沿用 Vertiv APM2 規格當代理，能耗的轉換損失從這裡讀）、PowerConversion_01（中壓 AC → 800 VDC）。
+    sk = UsdGeom.Xform.Define(stage, f"{path}/PowerSkid"); sk.AddTranslateOp().Set(Gf.Vec3d(L + sizing.SKID_GAP, 0.0, 0.0))
+    skp = sk.GetPrim(); Usd.ModelAPI(skp).SetKind(Kind.Tokens.group)
+    if dc:
+        attr(skp, "aif:core:assetClass", Sdf.ValueTypeNames.String, "800 VDC power center (MV AC -> 800 VDC rack power), one per DSX POD")
+        attr(skp, "aif:spec:outputVoltageVDC", Sdf.ValueTypeNames.Float, 800.0)
+        attr(skp, "aif:core:assetDescription", Sdf.ValueTypeNames.String, "NVIDIA GTC: 800 VDC power center delivers more power with 45% less copper; conversion loss modelled via UPS_01 (APM2 proxy)")
+    else:
+        attr(skp, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Power skid (MV transformer + UPS + LV distribution), one per GADU unit")
+        attr(skp, "aif:core:assetDescription", Sdf.ValueTypeNames.String, "GIGABYTE GADU: preassembled, self-contained power unit (spec table footnote); conversion loss via UPS_01 (Vertiv APM2 spec)")
+    attr(skp, "aif:core:overallGeometryDimensions", Sdf.ValueTypeNames.Float3, Gf.Vec3f(sizing.SKID_L * 1000, W * 1000, 2591.0), "ISO 20 ft outer dims (mm)")
+    if SKID_ASSET.exists():
+        enc = UsdGeom.Xform.Define(stage, f"{path}/PowerSkid/Enclosure").GetPrim()
+        enc.GetReferences().AddReference(rel(SKID_ASSET), "/DSXPOD_PowerSkid"); Usd.ModelAPI(enc).SetKind(Kind.Tokens.subcomponent); enc.SetInstanceable(True)
+    ups = box(stage, f"{path}/PowerSkid/UPS_01", EQUIP["UPS"]["size"], (0.5, 0.6, 0.10), ("UPS", looks["UPS"]), Kind.Tokens.component)
+    add_vertiv_props(ups, EQUIP["UPS"]["asset"]); attr(ups, "layout:facing", Sdf.ValueTypeNames.Token, "-y")
+    tx_kva = math.ceil(it_kw * 1.25 / 100.0) * 100
+    tx = box(stage, f"{path}/PowerSkid/PowerConversion_01", (1.6, 1.3, 2.0), (3.2, 0.55, 0.10), ("UPS", looks["UPS"]), Kind.Tokens.component)
+    attr(tx, "aif:core:assetClass", Sdf.ValueTypeNames.String, "MV AC -> 800 VDC power conversion (solid-state / rectifier)" if dc else "MV/LV transformer + switchgear")
+    attr(tx, "aif:spec:ratedPowerKVA", Sdf.ValueTypeNames.Float, float(tx_kva), "1.25 x POD nameplate IT")
+    if dc: attr(tx, "aif:spec:outputVoltageVDC", Sdf.ValueTypeNames.Float, 800.0)
+    # 地面線槽：電力中心西端 → 貨櫃東端（800 VDC 母線 / 電纜）
+    bw = box(stage, f"{path}/PowerSkid/Busway", (sizing.SKID_GAP + 0.3, 0.8, 0.18), (-sizing.SKID_GAP - 0.15, (W - 0.8) / 2, 0.0), ("Deck", looks["Deck"]), Kind.Tokens.subcomponent)
+    attr(bw, "aif:core:assetClass", Sdf.ValueTypeNames.String, "800 VDC busway / cable tray (ground level)" if dc else "LV busway / cable tray (ground level)")
+    for q in (ups, tx):
+        UsdGeom.Imageable(q.GetChild("Geom")).CreatePurposeAttr(UsdGeom.Tokens.proxy)     # 外觀由電力模組外殼負責
+        attr(q, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "spec carrier inside the procedural power skid enclosure; Geom = proxy footprint")
+
+
+def build_gadu_unit(stage, path, origin, looks, sk, sku_key):
+    """技嘉 GADU 單位：IT 貨櫃（一排：CDU｜運算櫃夾列間冷卻器｜網路櫃｜CDU）+ 東端 power skid + 北側 1–2 台氣冷冰水機。
+    數字來自 products.PRODUCTS["gadu"]（官網規格表）；外殼沿用程序化 40 ft 貨櫃，色帶改成產品色以便區分。"""
+    L, W, H = CONTAINER
+    pr = PRODUCTS_MOD.PRODUCTS["gadu"]
+    pod = UsdGeom.Xform.Define(stage, path); pod.AddTranslateOp().Set(Gf.Vec3d(origin[0], origin[1], 0.0))
+    pp = pod.GetPrim(); Usd.ModelAPI(pp).SetKind(Kind.Tokens.assembly)
+    attr(pp, "aif:core:assetClass", Sdf.ValueTypeNames.String, "GIGABYTE GADU unit (IT container + power skid + chillers)")
+    attr(pp, "aif:core:assetDescription", Sdf.ValueTypeNames.String,
+         f"GADU {sk['name']}: {sk['racks_compute']} compute + {sk['racks_network']} network/mgmt racks ({sk['rack_u']}U), in-row CDU x{sk['cdus']} (N+1), in-row coolers x{sk['inrow_coolers']} (N+1), {sk['chillers']} air-cooled chiller(s), {sk['it_mw']:g} MW IT")
+    attr(pp, "aif:spec:sku", Sdf.ValueTypeNames.String, sku_key); attr(pp, "aif:spec:skuName", Sdf.ValueTypeNames.String, sk["name"])
+    attr(pp, "aif:core:overallGeometryDimensions", Sdf.ValueTypeNames.Float3, Gf.Vec3f(L * 1000, W * 1000, H * 1000), "IT container outer dims (mm)")
+    # 殼（色帶換成產品色）
+    sh = UsdGeom.Xform.Define(stage, f"{path}/Shell").GetPrim(); Usd.ModelAPI(sh).SetKind(Kind.Tokens.group)
+    if CONTAINER_ASSET.exists():
+        sh.GetReferences().AddReference(rel(CONTAINER_ASSET), "/DSXPOD_Container")
+        Usd.ModelAPI(sh).SetKind(Kind.Tokens.group)
+        band = stage.GetPrimAtPath(f"{path}/Shell/Looks/Band/Surface")
+        if band and band.IsValid(): band.GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*pr["band_rgb"]))
+    # 一排：機櫃、CDU、列間冷卻器
+    rk = UsdGeom.Scope.Define(stage, f"{path}/Racks").GetPrim(); Usd.ModelAPI(rk).SetKind(Kind.Tokens.group)
+    eq = UsdGeom.Scope.Define(stage, f"{path}/Equipment").GetPrim(); Usd.ModelAPI(eq).SetKind(Kind.Tokens.group)
+    y = WALL_T + 0.02; n_rack = n_cdu = n_irc = 0
+    lf = float(sk["liquid_fraction"]); nvidia_dlc = sk["liquid"] and "mi355x" not in sku_key
+    for kind, x, w in sk["row"]:
+        if kind in ("rack", "net"):
+            n_rack += 1
+            r = box(stage, f"{path}/Racks/Rack_{n_rack:02d}", RACK_SIZE, (x, y, 0.10), ("Rack", looks["Rack"]), Kind.Tokens.component)
+            kw = float(sk["rack_kw"]) if kind == "rack" else float(sk["net_rack_kw"])
+            attr(r, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Compute rack" if kind == "rack" else "Network / management rack")
+            attr(r, "aif:core:modelNumber", Sdf.ValueTypeNames.String, sk["name"] if kind == "rack" else "Network / management (GADU)")
+            attr(r, "aif:core:width", Sdf.ValueTypeNames.Float, 600.0); attr(r, "aif:core:depth", Sdf.ValueTypeNames.Float, 1200.0)
+            attr(r, "aif:core:installationClearance", Sdf.ValueTypeNames.Float, 1200.0); attr(r, "aif:core:accessibilityRequirement", Sdf.ValueTypeNames.Float, 900.0)
+            attr(r, "aif:spec:maxPowerDcTdp", Sdf.ValueTypeNames.Float, kw, "from GIGABYTE GADU spec table: (IT MW - network racks x 15 kW) / compute racks")
+            attr(r, "aif:spec:liquidCooling", Sdf.ValueTypeNames.Float, kw * (lf if kind == "rack" else 0.0))
+            attr(r, "aif:spec:airCooling", Sdf.ValueTypeNames.Float, kw * ((1.0 - lf) if kind == "rack" else 1.0))
+            attr(r, "layout:facing", Sdf.ValueTypeNames.Token, "-y")
+            if kind == "rack" and nvidia_dlc:                   # NVIDIA DLC 機櫃：借 GB300 官方層的流量 / 壓降曲線（功率用本地值蓋過）
+                for lyr in ("GB300_Properties.usda", "GB300_ConnectionPoints.usda"):
+                    f = GB300 / "layers" / lyr
+                    if f.exists(): r.GetReferences().AddReference(rel(f))
+                attr(r, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "flow / pressure-drop curves proxied by GB300 official layer; power from GADU spec table")
+                add_full_geometry(r, GB300 / "proxy" / "proxy_GB300.usd", RACK_SIZE, rotate_z=-90.0, note="GADU compute rack", source="nvidia")
+        elif kind == "cdu":
+            n_cdu += 1
+            c = box(stage, f"{path}/Equipment/CDU_{n_cdu:02d}", EQUIP["CDU"]["size"], (x, y, 0.10), ("CDU", looks["CDU"]), Kind.Tokens.component)
+            add_vertiv_props(c, EQUIP["CDU"]["asset"]); attr(c, "layout:facing", Sdf.ValueTypeNames.Token, "-y", "in-row CDU (N+1)")
+            add_full_geometry(c, VERTIV / EQUIP["CDU"]["asset"] / "full" / "simready_usd" / f"{EQUIP['CDU']['asset']}_main.usd", EQUIP["CDU"]["size"],
+                              note="Vertiv XDU2300 spec layer (GADU in-row CDU)", source="vertiv")
+        elif kind == "irc":
+            n_irc += 1
+            ir = box(stage, f"{path}/Equipment/InRowCooler_{n_irc:02d}", (w, 1.2, 2.0), (x, y, 0.10), ("Panel", looks["Panel"]), Kind.Tokens.component)
+            attr(ir, "aif:core:assetClass", Sdf.ValueTypeNames.String, "In-row cooler (chilled-water coil + fans, air side)")
+            attr(ir, "layout:facing", Sdf.ValueTypeNames.Token, "-y")
+    # 冰水供回水主管（天花板北側）
+    hd = INTERIOR["headers"]
+    pip = UsdGeom.Xform.Define(stage, f"{path}/Equipment/Headers").GetPrim(); Usd.ModelAPI(pip).SetKind(Kind.Tokens.component)
+    attr(pip, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Chilled water supply / return headers (to the chillers)")
+    for nm, yy in zip(("Supply", "Return"), hd["y"]):
+        cylinder(stage, f"{path}/Equipment/Headers/{nm}", hd["r"], L - 0.4, (L / 2, yy, hd["z"]), axis="X", look="Pipe", looks=looks)
+    # 冰水機（北側，與貨櫃平行）
+    ch = UsdGeom.Scope.Define(stage, f"{path}/Chillers").GetPrim(); Usd.ModelAPI(ch).SetKind(Kind.Tokens.group)
+    design_kw = sk["it_mw"] * 1000.0 * 1.03
+    n_ch = int(sk["chillers"]); cap_each = math.ceil(design_kw * 1.2 / n_ch / 10.0) * 10.0
+    cL, cW = 6.0, 2.4
+    for k in range(n_ch):
+        cx = 0.5 + k * (cL + 0.6)
+        c = UsdGeom.Xform.Define(stage, f"{path}/Chillers/Chiller_{k+1:02d}"); c.AddTranslateOp().Set(Gf.Vec3d(cx, W + 1.0, 0.0))
+        cp = c.GetPrim(); Usd.ModelAPI(cp).SetKind(Kind.Tokens.component)
+        attr(cp, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Packaged air-cooled chiller")
+        attr(cp, "aif:core:overallGeometryDimensions", Sdf.ValueTypeNames.Float3, Gf.Vec3f(cL * 1000, cW * 1000, 2600.0))
+        attr(cp, "aif:spec:nominalCoolingCapacity", Sdf.ValueTypeNames.Float, cap_each, "kW at rating ambient; 1.2 x design heat / n chillers")
+        attr(cp, "aif:spec:chilledWaterSupplyC", Sdf.ValueTypeNames.Float, float(sk["chws_c"]))
+        attr(cp, "layout:facing", Sdf.ValueTypeNames.Token, "+y"); attr(cp, "thermal:exhaustDirection", Sdf.ValueTypeNames.Token, "+z")
+        g = UsdGeom.Cube.Define(stage, f"{path}/Chillers/Chiller_{k+1:02d}/Geom"); g.GetSizeAttr().Set(1.0)
+        g.AddTranslateOp().Set(Gf.Vec3d(cL / 2, cW / 2, 1.3)); g.AddScaleOp().Set(Gf.Vec3f(cL, cW, 2.6)); bind(g.GetPrim(), looks["Chiller"])
+        if CHILLER_ASSET.exists():
+            enc = UsdGeom.Xform.Define(stage, f"{path}/Chillers/Chiller_{k+1:02d}/Enclosure").GetPrim()
+            enc.GetReferences().AddReference(rel(CHILLER_ASSET), "/GADU_Chiller"); Usd.ModelAPI(enc).SetKind(Kind.Tokens.subcomponent); enc.SetInstanceable(True)
+            UsdGeom.Imageable(g).CreatePurposeAttr(UsdGeom.Tokens.proxy)
+    add_power_skid(stage, path, looks, L, W, sk["it_mw"] * 1000.0, dc=False)
     return pp
 
 
@@ -351,14 +506,19 @@ def author_contract(stage, defaults: Params):
 
 
 # ---------------------------------------------------------------- 主函式
-def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", supply="t45", heat_rejection="stacked", n_du=None, layout=None):
+def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", supply="t45", heat_rejection="stacked", n_du=None, layout=None, product=None, sku=None):
     """layout = sizing.plan(...) 的結果。detail 模式：pod.usda 就是整個陣列。campus 模式：pod.usda 是代表區塊（第一塊），
     另寫 campus.usda 以 instanceable Reference 鋪滿所有區塊。沒給 layout 時依 n_pods 自動排。"""
     if n_du is not None: n_pods = n_du          # 舊參數名相容
     if layout is None: layout = sizing._layout(n_pods, [], dict(n_pods=n_pods))
     blk0 = [p for p in layout["pods"] if p["block"] == 0]
     n_pods = len(blk0)
-    defaults = Params()
+    product = product or layout.get("product", "dsx_pod"); sku = sku or layout.get("sku")
+    pr, sk = PRODUCTS_MOD.spec(product, sku); sku = sku or PRODUCTS_MOD.default_sku(product)
+    if cooling not in COOLING_BY_PRODUCT[product]: cooling = COOLING_BY_PRODUCT[product][0]
+    if supply not in SUPPLY_BY_PRODUCT[product]: supply = SUPPLY_BY_PRODUCT[product][0]
+    defaults = Params(product=product, sku=sku, cooling_mode=pr["cooling_mode"])
+    if product == "gadu": defaults.chws_supply_c = float(sk["chws_c"])
     REAL_GEO.clear()
     old_sublayers = []
     if OUT.exists():
@@ -388,13 +548,21 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     plant = UsdGeom.Xform.Define(stage, PLANT).GetPrim(); Usd.ModelAPI(plant).SetKind(Kind.Tokens.assembly)
     b0 = layout["blocks"][0]; PL, PW = round(b0["length"], 2), round(b0["width"], 2)
     looks = make_looks(stage)
-    attr(plant, "aif:core:assetClass", Sdf.ValueTypeNames.String, "AI Factory site (DSX POD array)")
-    attr(plant, "aif:core:assetDescription", Sdf.ValueTypeNames.String,
-         f"{n_pods} DSX POD container(s) x {RACKS_PER_POD} racks, warm-water liquid cooling, dry coolers {heat_rejection}; array {PL} x {PW} m")
-    attr(plant, "aif:spec:podCount", Sdf.ValueTypeNames.Int, n_pods); attr(plant, "aif:spec:rackCount", Sdf.ValueTypeNames.Int, n_pods * RACKS_PER_POD)
+    attr(plant, "aif:core:product", Sdf.ValueTypeNames.String, product, "dsx_pod | gadu (dsxpod/products.py)")
+    attr(plant, "aif:spec:sku", Sdf.ValueTypeNames.String, sku); attr(plant, "aif:spec:skuName", Sdf.ValueTypeNames.String, sk["name"])
+    attr(plant, "aif:spec:coolingMode", Sdf.ValueTypeNames.String, pr["cooling_mode"], "warm_water_dry (DSX POD) | chilled_water (GADU)")
+    if product == "gadu":
+        attr(plant, "aif:core:assetClass", Sdf.ValueTypeNames.String, "AI Factory site (GIGABYTE GADU units)")
+        attr(plant, "aif:core:assetDescription", Sdf.ValueTypeNames.String,
+             f"{n_pods} GADU unit(s), {sk['name']}: {sk['racks_total']} racks each, in-row CDU / coolers + air-cooled chillers; array {PL} x {PW} m")
+    else:
+        attr(plant, "aif:core:assetClass", Sdf.ValueTypeNames.String, "AI Factory site (DSX POD array)")
+        attr(plant, "aif:core:assetDescription", Sdf.ValueTypeNames.String,
+             f"{n_pods} DSX POD container(s) x {RACKS_PER_POD} racks, warm-water liquid cooling, dry coolers {heat_rejection}; array {PL} x {PW} m")
+    attr(plant, "aif:spec:podCount", Sdf.ValueTypeNames.Int, n_pods); attr(plant, "aif:spec:rackCount", Sdf.ValueTypeNames.Int, n_pods * int(sk["racks_total"]))
     attr(plant, "aif:spec:itUtilization", Sdf.ValueTypeNames.Double, utilization, "mean IT utilisation (0-1)")
     attr(plant, "aif:spec:coolantMixture", Sdf.ValueTypeNames.String, "75% water / 25% propylene glycol")
-    attr(plant, "aif:spec:heatRejectionPlacement", Sdf.ValueTypeNames.String, heat_rejection)
+    attr(plant, "aif:spec:heatRejectionPlacement", Sdf.ValueTypeNames.String, heat_rejection if product == "dsx_pod" else "ground_chillers")
     attr(plant, "thermal:distributionLossFraction", Sdf.ValueTypeNames.Float, 0.005, "downstream distribution losses as fraction of IT (added to UPS loss)")
     attr(plant, "layout:mode", Sdf.ValueTypeNames.Token, layout["mode"], "detail = this stage is the whole site; campus = this stage is one representative block of campus.usda")
     attr(plant, "aif:spec:siteItMW", Sdf.ValueTypeNames.Float, float(layout["it_mw"]), "whole-site IT nameplate (drives the site heat-island term)")
@@ -407,10 +575,11 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     n_cool = math.ceil(q_pod / EQUIP["DryCooler"]["capacity_kw"]) + DRYCOOLER_SPARE
     ox, oy = b0["x"], b0["y"]
     for i, pd in enumerate(blk0, 1):
-        build_pod(stage, f"{PLANT}/POD_{i:02d}", (pd["x"] - ox, pd["y"] - oy), looks, heat_rejection, n_cool)
+        if product == "gadu": build_gadu_unit(stage, f"{PLANT}/POD_{i:02d}", (pd["x"] - ox, pd["y"] - oy), looks, sk, sku)
+        else: build_pod(stage, f"{PLANT}/POD_{i:02d}", (pd["x"] - ox, pd["y"] - oy), looks, heat_rejection, n_cool)
 
     # 設備場（remote）
-    if heat_rejection == "remote":
+    if heat_rejection == "remote" and product == "dsx_pod":
         yd = UsdGeom.Scope.Define(stage, f"{PLANT}/CoolerYard").GetPrim(); Usd.ModelAPI(yd).SetKind(Kind.Tokens.group)
         n_total = n_pods * n_cool; sx, sy = EQUIP["DryCooler"]["size"][:2]
         per = max(2, int((PL + 0.01) // (sx + YARD_GAP_X)))
@@ -421,14 +590,13 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
 
     # 廠區共用：UPS、輔助冰水機
     ut = UsdGeom.Scope.Define(stage, f"{PLANT}/Utility").GetPrim(); Usd.ModelAPI(ut).SetKind(Kind.Tokens.group)
-    ups = box(stage, f"{PLANT}/Utility/UPS_01", EQUIP["UPS"]["size"], (-4.0, 0.0, 0.0), ("UPS", looks["UPS"]), Kind.Tokens.component)
-    add_vertiv_props(ups, EQUIP["UPS"]["asset"]); attr(ups, "layout:facing", Sdf.ValueTypeNames.Token, "-x")
-    add_full_geometry(ups, VERTIV / EQUIP["UPS"]["asset"] / "full" / "simready_usd" / f"{EQUIP['UPS']['asset']}_main.usd", EQUIP["UPS"]["size"],
-                      note="Vertiv APM2 spec layer (site-level power, efficiency feeds the UPS loss)", source="vertiv")
-    ch = box(stage, f"{PLANT}/Utility/Chiller_01", (2.0, 1.2, 2.0), (-4.0, 3.0, 0.0), ("Chiller", looks["Chiller"]), Kind.Tokens.component)
-    attr(ch, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Chiller")
-    attr(ch, "aif:core:assetDescription", Sdf.ValueTypeNames.String, "Placeholder air-cooled trim chiller; active only in cooling = dry_plus_chiller")
-    attr(ch, "aif:spec:copAt25C", Sdf.ValueTypeNames.Double, defaults.chiller_cop_25c); attr(ch, "aif:spec:copAt45C", Sdf.ValueTypeNames.Double, defaults.chiller_cop_45c)
+    # UPS 已移到每個 POD 的電力模組（PowerSkid/UPS_01）
+    ch = None
+    if product == "dsx_pod": ch = box(stage, f"{PLANT}/Utility/Chiller_01", (2.0, 1.2, 2.0), (-4.0, 3.0, 0.0), ("Chiller", looks["Chiller"]), Kind.Tokens.component)
+    if ch is not None: attr(ch, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Chiller")
+    if ch is not None:
+        attr(ch, "aif:core:assetDescription", Sdf.ValueTypeNames.String, "Placeholder air-cooled trim chiller; active only in cooling = dry_plus_chiller")
+        attr(ch, "aif:spec:copAt25C", Sdf.ValueTypeNames.Double, defaults.chiller_cop_25c); attr(ch, "aif:spec:copAt45C", Sdf.ValueTypeNames.Double, defaults.chiller_cop_45c)
 
     # 廠區連接點（場地的電力 / 冷卻接口）
     cp = UsdGeom.Scope.Define(stage, f"{PLANT}/ConnectionPoints"); cp.CreatePurposeAttr(UsdGeom.Tokens.guide)
@@ -445,19 +613,22 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
 
     vs = plant.GetVariantSets()
     cv = vs.AddVariantSet("cooling")
-    for name in COOLING: cv.AddVariant(name)
+    for name in COOLING_BY_PRODUCT[product]: cv.AddVariant(name)
     dcs = [p for p in Usd.PrimRange(plant) if p.GetName().startswith("DryCooler_")]
-    for name, cfg in COOLING.items():
+    for name in COOLING_BY_PRODUCT[product]:
+        cfg = COOLING[name]
         cv.SetVariantSelection(name)
         with cv.GetVariantEditContext():
-            ch.SetActive(bool(cfg["has_chiller"]))
+            if ch is not None: ch.SetActive(bool(cfg["has_chiller"]))
             for d in dcs:
                 attr(d, "aif:spec:coolingTypeOverride", Sdf.ValueTypeNames.String, "Evaporative (adiabatic pre-cooling)" if cfg["evaporative"] else "Dry")
             attr(plant, "aif:spec:coolingStrategy", Sdf.ValueTypeNames.String, cfg["doc"])
     cv.SetVariantSelection(cooling)
     tv = vs.AddVariantSet("supply_temp")
-    for name in SUPPLY_TEMP: tv.AddVariant(name)
-    for name, t in SUPPLY_TEMP.items():
+    sup_names = SUPPLY_BY_PRODUCT[product] + (["t20"] if product == "dsx_pod" else [])
+    for name in sup_names: tv.AddVariant(name)
+    for name in sup_names:
+        t = SUPPLY_TEMP[name]
         tv.SetVariantSelection(name)
         with tv.GetVariantEditContext():
             attr(plant, "aif:spec:referenceFacilityCoolantTemperature", Sdf.ValueTypeNames.Double, t, "TCS supply water temperature (C)")
@@ -469,7 +640,7 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     for sl in old_sublayers:
         if sl not in root.subLayerPaths: root.subLayerPaths.append(sl)
     root.Save()
-    if layout["mode"] == "campus": build_campus(layout, site_key, cooling, supply)
+    if layout["mode"] == "campus": build_campus(layout, site_key, cooling, supply, product)
     elif CAMPUS.exists(): CAMPUS.unlink()
     return stage
 
@@ -477,7 +648,7 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
 CAMPUS = OUT_DIR / "campus.usda"
 
 
-def build_campus(layout, site_key, cooling, supply):
+def build_campus(layout, site_key, cooling, supply, product="dsx_pod"):
     """園區：每個區塊一個 instanceable Reference → pod.usda </World/Plant>（同一個原型，Composer 只載一份）。
     最後一塊 POD 數不足時仍引用代表區塊，並在 prim 上標實際 POD 數（能耗依 POD 數縮放，幾何是近似）。"""
     if CAMPUS.exists(): CAMPUS.unlink()
@@ -487,7 +658,8 @@ def build_campus(layout, site_key, cooling, supply):
     site = st.DefinePrim("/World/Site"); site.GetReferences().AddReference(rel(OUT), "/World/Site")
     site.GetVariantSets().GetVariantSet("site").SetVariantSelection(site_key)
     cp = UsdGeom.Xform.Define(st, "/World/Campus").GetPrim(); Usd.ModelAPI(cp).SetKind(Kind.Tokens.assembly)
-    attr(cp, "aif:core:assetClass", Sdf.ValueTypeNames.String, "AI Factory campus (DSX POD blocks)")
+    attr(cp, "aif:core:assetClass", Sdf.ValueTypeNames.String, "AI Factory campus (DSX POD blocks)" if product == "dsx_pod" else "AI Factory campus (GIGABYTE GADU blocks)")
+    attr(cp, "aif:core:product", Sdf.ValueTypeNames.String, product)
     attr(cp, "aif:spec:siteItMW", Sdf.ValueTypeNames.Float, float(layout["it_mw"])); attr(cp, "aif:spec:sitePodCount", Sdf.ValueTypeNames.Int, int(layout["n_pods"]))
     attr(cp, "aif:spec:siteBlockCount", Sdf.ValueTypeNames.Int, int(layout["n_blocks"])); attr(cp, "layout:siteSizeM", Sdf.ValueTypeNames.Float2, Gf.Vec2f(*layout["site_m"]))
     attr(cp, "layout:note", Sdf.ValueTypeNames.String, "screening-level campus: blocks are instances of pod.usda; site heat-island term is a box-model estimate; verify key sites with CFD")

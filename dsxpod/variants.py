@@ -69,6 +69,19 @@ class Params:
     mixing_height_m: float = 50.0          # 近地混合層高度（進風高度相關的那一層；假設）
     island_factor: float = 0.5             # 基地內平均 = 出口溫升 × 0.5
     island_max_k: float = 5.0              # 上限：微風時熱羽流上升、白天混合層遠大於 50 m，箱型模型會高估（篩選假設）
+    # ---- 冰水機路線（GADU：列間 CDU / 冷卻器 + 氣冷冰水機；cooling_mode = "chilled_water"）----
+    cooling_mode: str = "warm_water_dry"   # warm_water_dry（DSX POD）| chilled_water（GADU）← Plant aif:spec:coolingMode
+    chws_supply_c: float = 25.0            # 冰水供水溫度（DLC SKU 25、氣冷 SKU 15）← Chiller aif:spec:chilledWaterSupplyC
+    chiller_carnot_eff: float = 0.45       # COP = η × T_evap / (T_cond − T_evap)（氣冷螺旋 / 渦卷機組量級）
+    condenser_approach_k: float = 10.0     # 冷凝溫度 − 外氣乾球
+    evaporator_approach_k: float = 3.0     # 冰水供水 − 蒸發溫度
+    chiller_capacity_margin: float = 1.2   # 額定（rating_ambient 時）容量 / 設計排熱
+    chiller_rating_ambient_c: float = 35.0
+    chiller_derate_per_k: float = 0.02     # 外氣每高 1 K 容量少 2%
+    chw_pump_frac: float = 0.012           # 冰水一次 / 二次泵電 / 總排熱
+    inrow_fan_frac: float = 0.03           # 列間冷卻器風扇電 / 氣側排熱
+    product: str = "dsx_pod"
+    sku: str = "vera_rubin_nvl72"
     # ---- 配電與雜項 ----
     ups_loss_frac: float = 0.03            # UPS 效率 + 配電損失（由 UPS aif:spec:doubleConversionEfficiency + distributionLossFraction 算）
     misc_frac: float = 0.01
@@ -125,8 +138,8 @@ class Params:
     def roof_area_m2(self): return self.pod_length_m * self.pod_width_m * self.envelope_count
     def wall_area_m2(self): return 2 * (self.pod_length_m + self.pod_width_m) * self.ceiling_m * self.envelope_count
     def rack_kw(self): return self.rack_kw_override if self.rack_kw_override else RACK_KW_NAMEPLATE
-    def liquid_fraction(self): return self.liquid_fraction_override if self.liquid_fraction_override else LIQUID_FRACTION
-    def air_fraction(self): return (1.0 - self.liquid_fraction() - 0.005) if self.liquid_fraction_override else AIR_FRACTION
+    def liquid_fraction(self): return self.liquid_fraction_override if self.liquid_fraction_override is not None else LIQUID_FRACTION
+    def air_fraction(self): return (1.0 - self.liquid_fraction() - 0.005) if self.liquid_fraction_override is not None else AIR_FRACTION   # 0（全氣冷）也是有效值
     def it_kw(self): return self.racks * self.rack_kw() * self.it_utilization
     def to_dict(self): return asdict(self)
 
@@ -139,9 +152,21 @@ COOLING = {
                              doc="dry coolers first, air-cooled trim chiller covers the deficit"),
     "evaporative":      dict(has_chiller=False, evaporative=True,  label="蒸發式（絕熱）",
                              doc="adiabatic pre-cooling when ambient > 30 C; heat rejection follows wet bulb; consumes water"),
+    "chilled_water":    dict(has_chiller=True,  evaporative=False, label="列間冷卻＋氣冷冰水機",
+                             doc="GADU: in-row CDUs / in-row coolers on a chilled-water loop; all heat rejected by packaged air-cooled chillers (no dry coolers)"),
 }
-SUPPLY_TEMP = {"t45": 45.0, "t32": 32.0, "t20": 20.0}      # t20 只當內部對照，前端不露出
-SUPPLY_LABEL = {"t45": "45 °C（DSX 溫水）", "t32": "32 °C（ASHRAE W32）", "t20": "20 °C（傳統冰水，對照）"}
+SUPPLY_TEMP = {"t45": 45.0, "t32": 32.0, "t20": 20.0, "t28": 28.0}      # t20 只當內部對照；t28 = GADU（冰水 25 °C + CDU 接近 3 K）
+SUPPLY_LABEL = {"t45": "45 °C（DSX 溫水）", "t32": "32 °C（ASHRAE W32）", "t20": "20 °C（傳統冰水，對照）", "t28": "28 °C（GADU：冰水 25 °C 經 CDU）"}
+# 每種產品可用的散熱 / 供水選項（前端旋鈕、精簡 Kit 檢查、預算表都照這裡）
+COOLING_BY_PRODUCT = {"dsx_pod": ["dry_only", "dry_plus_chiller", "evaporative"], "gadu": ["chilled_water"]}
+SUPPLY_BY_PRODUCT = {"dsx_pod": ["t45", "t32"], "gadu": ["t28"]}
+
+
+def coerce_knobs(product, cooling, supply):
+    """產品不支援的散熱 / 供水選項換成該產品的預設（GADU 只有 chilled_water / t28）。"""
+    if cooling not in COOLING_BY_PRODUCT.get(product, []): cooling = COOLING_BY_PRODUCT[product][0]
+    if supply not in SUPPLY_BY_PRODUCT.get(product, []) and not (product == "dsx_pod" and supply == "t20"): supply = SUPPLY_BY_PRODUCT[product][0]
+    return cooling, supply
 
 
 def make_params(cooling="dry_only", supply_c=45.0, **overrides) -> Params:
@@ -160,6 +185,14 @@ def make_params(cooling="dry_only", supply_c=45.0, **overrides) -> Params:
 # usd_out.build() 依此表把 Params 預設值寫進 USD；stage_io.stage_to_params() 依此表讀回。
 # 不在表上的參數：racks（prim 數）、rack 功率 / 份額 / 曲線（GB300 層）、cdu_pump_frac 與 dry_cooler_fan_frac_design（Vertiv 規格推得）、
 # recirculation_k（幾何）、has_chiller（Chiller active）、evaporative（coolingTypeOverride）、外殼尺寸（包圍盒）、ups_loss_frac（UPS 效率 + 配電損失）。
+# 只適用某些產品的契約參數（其他產品讀不到時不算後備）
+CONTRACT_PRODUCTS = {
+    "dry_cooler_approach_k": {"dsx_pod"}, "dry_cooler_fan_floor": {"dsx_pod"}, "evap_approach_k": {"dsx_pod"}, "evap_switch_c": {"dsx_pod"},
+    "evap_water_l_per_kwh": {"dsx_pod"}, "chiller_cop_25c": {"dsx_pod"}, "chiller_cop_45c": {"dsx_pod"},
+    "air_fan_frac_full": {"dsx_pod"}, "air_economizer_full_c": {"dsx_pod"}, "air_economizer_off_c": {"dsx_pod"}, "air_dx_cop_25c": {"dsx_pod"}, "air_dx_cop_45c": {"dsx_pod"}, "air_supply_c": {"dsx_pod"},
+    "chws_supply_c": {"gadu"}, "chiller_carnot_eff": {"gadu"}, "condenser_approach_k": {"gadu"}, "evaporator_approach_k": {"gadu"},
+    "chiller_capacity_margin": {"gadu"}, "chiller_rating_ambient_c": {"gadu"}, "chiller_derate_per_k": {"gadu"}, "chw_pump_frac": {"gadu"}, "inrow_fan_frac": {"gadu"},
+}
 USD_CONTRACT = [
     # param,                   prim（相對 POD）,      attr,                                      doc
     ("it_utilization",          ".",                   "aif:spec:itUtilization",                  "mean IT utilisation (0-1)"),
@@ -189,6 +222,16 @@ USD_CONTRACT = [
     ("chiller_cop_25c",         "Utility/Chiller_01",  "aif:spec:copAt25C",                       "trim chiller COP at 25 C ambient"),
     ("chiller_cop_45c",         "Utility/Chiller_01",  "aif:spec:copAt45C",                       "trim chiller COP at 45 C ambient"),
     ("h_outside_w_m2k",         "POD_01/Shell",            "thermal:hOutsideWm2K",                    "outside surface film coefficient for sol-air (W/m2K)"),
+    # GADU（冰水機路線）
+    ("chws_supply_c",           "POD_01/Chillers/Chiller_01", "aif:spec:chilledWaterSupplyC",         "chilled water supply temperature (C)"),
+    ("chiller_carnot_eff",      "POD_01/Chillers/Chiller_01", "thermal:carnotEfficiency",             "COP = eff x T_evap / (T_cond - T_evap)"),
+    ("condenser_approach_k",    "POD_01/Chillers/Chiller_01", "thermal:condenserApproachK",           "condensing temperature - ambient dry bulb (K)"),
+    ("evaporator_approach_k",   "POD_01/Chillers/Chiller_01", "thermal:evaporatorApproachK",          "chilled water supply - evaporating temperature (K)"),
+    ("chiller_capacity_margin", "POD_01/Chillers/Chiller_01", "thermal:capacityMargin",               "rated capacity at rating ambient / design heat"),
+    ("chiller_rating_ambient_c","POD_01/Chillers/Chiller_01", "thermal:ratingAmbientC",               "ambient at which rated capacity applies (C)"),
+    ("chiller_derate_per_k",    "POD_01/Chillers/Chiller_01", "thermal:derateFractionPerK",           "capacity loss per K above rating ambient"),
+    ("chw_pump_frac",           ".",                          "thermal:chwPumpFraction",              "chilled water pump power / total heat"),
+    ("inrow_fan_frac",          "@InRowCooler_01",            "thermal:fanFractionOfAirHeat",         "in-row cooler fan power / air-side heat"),
     ("roof_u_w_m2k",            "POD_01/Shell/Geometry/Roof",       "thermal:uValueWm2K",                      "roof U value (W/m2K)"),
     ("roof_absorptivity",       "POD_01/Shell/Geometry/Roof",       "thermal:solarAbsorptivity",               "roof solar absorptivity"),
     ("wall_absorptivity",       "POD_01/Shell/Geometry/Wall_N",     "thermal:solarAbsorptivity",               "wall solar absorptivity (coating)"),

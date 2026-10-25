@@ -9,108 +9,123 @@
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 </head>
 <body>
+<!-- 文字都在 js/i18n.js（data-i18n = innerHTML、data-i18n-title、data-i18n-aria）；這裡的中文只是載入 i18n 前的預設 -->
 <canvas id="scene"></canvas>
-<div id="loading" class="loading" role="progressbar" aria-label="載入進度" aria-valuemin="0" aria-valuemax="100">
+<div id="loading" class="loading" role="progressbar" aria-label="載入進度" data-i18n-aria="load.aria" aria-valuemin="0" aria-valuemax="100">
   <div class="ld">
-    <div class="ld-title">DSX POD 場址模擬</div>
+    <div class="ld-title" data-i18n="app.title">DSX POD 場址模擬</div>
     <div class="ld-bar"><i id="ldFill"></i></div>
-    <div class="ld-row"><span id="ldMsg">載入 3D 引擎與圖表程式庫…</span><span id="ldPct"></span></div>
+    <div class="ld-row"><span id="ldMsg" data-i18n="load.libs">載入 3D 引擎與圖表程式庫…</span><span id="ldPct"></span></div>
   </div>
 </div>
 
-<button class="menu-btn panel" id="menuBtn" aria-label="設定選單">☰</button>
+<button class="menu-btn panel" id="menuBtn" aria-label="設定選單" data-i18n-aria="nav.menu">☰</button>
 <header class="brand panel">
-  <div class="brand-title">DSX POD 場址模擬</div>
+  <div class="brand-title" data-i18n="app.title">DSX POD 場址模擬</div>
   <div class="brand-sub" id="summaryChip">—</div>
 </header>
 
-<!-- 左：浮動導覽 -->
-<nav class="nav panel" id="nav" aria-label="設定">
+<!-- 左：設定（四個分頁，每個分頁一個鏡頭） -->
+<nav class="nav panel" id="nav" aria-label="設定" data-i18n-aria="nav.aria">
   <div class="tabs" role="tablist">
-    <button class="tab active" data-tab="site" role="tab">① 場址</button>
-    <button class="tab" data-tab="size" role="tab">② 規模</button>
-    <button class="tab" data-tab="cool" role="tab">③ 散熱</button>
-    <button class="collapse" id="navCollapse" title="縮小設定面板" aria-label="縮小設定面板">‹</button>
+    <button class="tab active" data-tab="site" role="tab" data-i18n="nav.site">① 場址</button>
+    <button class="tab" data-tab="size" role="tab" data-i18n="nav.size">② 規模</button>
+    <button class="tab" data-tab="cool" role="tab" data-i18n="nav.cool">③ 散熱</button>
+    <button class="tab" data-tab="unit" role="tab" data-i18n="nav.unit">④ 單元</button>
+    <button class="collapse" id="navCollapse" title="縮小設定面板" aria-label="縮小設定面板" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse">‹</button>
   </div>
   <section class="tabpane active" data-pane="site">
-    <p class="hint">選一個氣候帶。卡片顯示逐月日最高 / 日最低氣溫帶與柯本分類。</p>
+    <p class="hint" data-i18n="site.hint">選一個氣候帶。卡片顯示逐月日最高 / 日最低氣溫帶與柯本分類。</p>
     <div class="sites" id="siteCards"></div>
   </section>
   <section class="tabpane" data-pane="size">
     <div class="seg" id="sizeMode">
-      <button class="on" data-mode="mw">總電量</button><button data-mode="site">基地範圍</button>
+      <button class="on" data-mode="mw" data-i18n="size.mw">總電量</button><button data-mode="site" data-i18n="size.site">基地範圍</button>
     </div>
     <div id="sizeMW">
-      <label class="field">IT 銘牌容量 <output id="mwOut">10 MW</output></label>
+      <label class="field"><span data-i18n="size.itmw">IT 銘牌容量</span> <output id="mwOut">10 MW</output></label>
       <input type="range" id="mwRange" min="0" max="1000" step="1" value="333">
       <div class="ticks"><span>1</span><span>10</span><span>100</span><span>1000 MW</span></div>
-      <label class="field small">精確輸入 <input type="number" id="mwInput" min="0.5" max="1000" step="0.5" value="10"> MW</label>
+      <label class="field small"><span data-i18n="size.exact">精確輸入</span> <span class="nw"><input type="number" id="mwInput" min="0.5" max="1000" step="0.5" value="10"> MW</span></label>
     </div>
     <div id="sizeSite" hidden>
-      <label class="field">基地長 <output id="slOut">120 m</output></label>
+      <label class="field"><span data-i18n="size.len">基地長</span> <output id="slOut">120 m</output></label>
       <input type="range" id="slRange" min="30" max="1500" step="10" value="120">
-      <label class="field">基地寬 <output id="swOut">100 m</output></label>
+      <label class="field"><span data-i18n="size.wid">基地寬</span> <output id="swOut">100 m</output></label>
       <input type="range" id="swRange" min="30" max="1500" step="10" value="100">
     </div>
     <dl class="facts" id="sizeFacts"></dl>
     <div class="warn" id="sizeWarn"></div>
   </section>
   <section class="tabpane" data-pane="cool">
-    <label class="field">建議設定（一鍵最佳化）</label>
+    <label class="field" data-i18n="cool.preset">建議設定</label>
     <div class="seg col preset" id="presetSeg">
-      <button data-p="energy">⚡ 最省電<small id="pEnergy">—</small></button>
-      <button data-p="water">💧 最省水<small id="pWater">—</small></button>
+      <button data-p="energy"><span data-i18n="cool.energy">⚡ 最省電</span><small id="pEnergy">—</small></button>
+      <button data-p="water"><span data-i18n="cool.water">💧 最省水</span><small id="pWater">—</small></button>
     </div>
-    <p class="hint">只在「全年每小時都排得掉熱」的組合裡挑（最省電：耗電差 0.5% 以內時選用水少的）。改場址或規模會自動重算；自己點下面的選項就變成自訂。</p>
-    <label class="field">自訂：散熱策略</label>
+    <p class="hint" data-i18n="cool.preset.hint">只從全年每小時都排得掉熱的組合裡挑；改場址或規模會自動重算，手動改下面的選項即為自訂。</p>
+    <label class="field" data-i18n="cool.strategy">散熱策略</label>
     <div class="seg col" id="coolSeg">
-      <button data-v="dry_only" class="on">純乾冷卻器<small>零用水；熱天可能排不掉</small></button>
-      <button data-v="dry_plus_chiller">乾冷卻器＋輔助冰水機<small>補足熱天；多耗電</small></button>
-      <button data-v="evaporative">蒸發式（絕熱）<small>熱天噴水；耗水</small></button>
+      <button data-v="dry_only" class="on"><span data-i18n="cool.dry">純乾冷卻器</span><small data-i18n="cool.dry.s">零用水；熱天可能排不掉</small></button>
+      <button data-v="dry_plus_chiller"><span data-i18n="cool.chiller">乾冷卻器＋輔助冰水機</span><small data-i18n="cool.chiller.s">補足熱天；多耗電</small></button>
+      <button data-v="evaporative"><span data-i18n="cool.evap">蒸發式（絕熱）</span><small data-i18n="cool.evap.s">熱天噴水；耗水</small></button>
     </div>
-    <label class="field">自訂：供水溫度</label>
+    <label class="field" data-i18n="cool.supply">供水溫度</label>
     <div class="seg" id="supplySeg">
-      <button data-v="t45" class="on">45 °C（DSX）</button><button data-v="t32">32 °C（W32）</button>
+      <button data-v="t45" class="on" data-i18n="cool.t45">45 °C（DSX）</button><button data-v="t32" data-i18n="cool.t32">32 °C（W32）</button>
     </div>
-    <div class="reco" id="reco" hidden></div>
   </section>
-  <footer class="navfoot">
-    <span>畫質</span>
-    <div class="seg mini" id="qualitySeg"><button data-q="high">高</button><button data-q="lite">輕量</button></div>
-    <span class="hint" id="qualityHint"></span>
-  </footer>
+  <section class="tabpane" data-pane="unit">
+    <p class="hint" data-i18n="unit.hint">一個 DSX POD 貨櫃：南牆打開看內部（依 NVIDIA 官方剖面圖排列）。點機櫃、CDU、滅火系統、供回水主管看說明。</p>
+    <div class="seg col" id="unitSeg">
+      <button data-view="unit" class="on"><span data-i18n="unit.inside">貨櫃內部（剖面）</span><small data-i18n="unit.inside.s">配電盤＋滅火鋼瓶｜3 櫃＋列間 CDU＋4 櫃</small></button>
+      <button data-view="cool"><span data-i18n="unit.cool">疊放散熱模組</span><small data-i18n="unit.cool.s">容量以 Vertiv MCV430 計（N+1）</small></button>
+      <button data-view="skid"><span data-i18n="unit.skidview">800 VDC 電力中心</span><small data-i18n="unit.skidview.s">中壓交流 → 800 V 直流，地面線槽接貨櫃</small></button>
+    </div>
+    <dl class="facts" id="unitFacts"></dl>
+    <p class="hint" data-i18n="unit.official">官方數字：28,500 kg、約 1,000 萬個零件、25 exaFLOPS、17 km 網路線。貨櫃內排列依官方剖面圖；機櫃規格以 GB300 代理 Vera Rubin NVL72。</p>
+  </section>
 </nav>
 
-<!-- 右：資料分頁 -->
-<aside class="data panel" id="data" aria-label="結果">
-  <div class="sheet-head" id="sheetHead" role="button" aria-label="展開報告">
+<!-- 右：報告（摘要 / 能耗 / 比較 / 氣候） -->
+<aside class="data panel" id="data" aria-label="結果" data-i18n-aria="data.aria">
+  <div class="sheet-head" id="sheetHead" role="button" aria-label="展開報告" data-i18n-aria="sheet.open">
     <div class="grab"></div>
     <div class="kstrip" id="kpiStrip"></div>
   </div>
   <div class="tabs" role="tablist">
-    <button class="tab active" data-tab="sum">摘要</button>
-    <button class="tab" data-tab="year">逐年</button>
-    <button class="tab" data-tab="mix">組成</button>
-    <button class="tab" data-tab="cmp">比較</button>
-    <button class="tab" data-tab="clim">氣候</button>
-    <button class="collapse" id="dataCollapse" title="縮小報告面板" aria-label="縮小報告面板">›</button>
+    <button class="tab active" data-tab="sum" data-i18n="tab.sum">摘要</button>
+    <button class="tab" data-tab="energy" data-i18n="tab.energy">能耗</button>
+    <button class="tab" data-tab="cmp" data-i18n="tab.cmp">比較</button>
+    <button class="tab" data-tab="clim" data-i18n="tab.clim">氣候</button>
+    <button class="collapse" id="dataCollapse" title="縮小報告面板" aria-label="縮小報告面板" data-i18n-title="data.collapse" data-i18n-aria="data.collapse">›</button>
   </div>
   <section class="tabpane active" data-pane="sum"><div class="kpis" id="kpis"></div><div class="notes" id="sumNotes"></div></section>
-  <section class="tabpane" data-pane="year"><div class="chart"><canvas id="yearChart"></canvas></div><p class="hint">20 年（2005–2024，ERA5）每年的 PUE。年際差遠小於場址與散熱策略的差。</p></section>
-  <section class="tabpane" data-pane="mix"><div class="chart"><canvas id="mixChart"></canvas></div><p class="hint">一年的設施耗電組成（不含 IT）。</p></section>
-  <section class="tabpane" data-pane="cmp"><div id="cmpTable"></div><p class="hint">同場址、同規模、同供水溫度下三種散熱策略。⚠ 表示每年有排不掉熱的小時，PUE 不可直接採信。</p></section>
+  <section class="tabpane" data-pane="energy">
+    <div class="chart mid"><canvas id="yearChart"></canvas></div><p class="hint" data-i18n="energy.year.hint">每年 PUE（2005–2024）。年際差遠小於場址與散熱策略的差。</p>
+    <div class="chart mid"><canvas id="mixChart"></canvas></div><p class="hint" data-i18n="energy.mix.hint">一年的設施耗電組成（不含 IT）。</p>
+  </section>
+  <section class="tabpane" data-pane="cmp"><div id="cmpTable"></div><p class="hint" data-i18n="cmp.hint">同場址、同規模、同供水溫度下的三種散熱策略。⚠ 表示每年有排不掉熱的小時，PUE 不可直接採信。</p></section>
   <section class="tabpane" data-pane="clim"><div class="chart short"><canvas id="climT"></canvas></div><div class="chart short"><canvas id="climP"></canvas></div><div id="climFacts" class="facts-grid"></div></section>
   <footer class="export">
-    <button id="exportBtn" class="primary">匯出 USD 與參數（zip）</button>
+    <button id="exportBtn" class="primary" data-i18n="export.btn" data-i18n-title="export.t">匯出 USD 與參數（zip）</button>
     <div class="hint" id="exportHint"></div>
   </footer>
 </aside>
 
-<!-- 左下：全螢幕瀏覽（兩側面板收起；Esc 或再按一次還原） -->
-<button class="fs-btn panel" id="fsBtn" title="收起 / 展開兩側面板（F）">⇔ 收起兩側</button>
+<!-- 左下工具列：收起兩側（F）、畫質、語言。手機版由 app.js 移進設定面板底部 -->
+<div class="toolbar panel" id="toolbar">
+  <button class="fs" id="fsBtn" title="收起 / 展開兩側面板（F）" data-i18n-title="fs.t">⇔ 收起兩側</button>
+  <span class="sep"></span>
+  <span data-i18n="quality">畫質</span>
+  <div class="seg mini" id="qualitySeg"><button data-q="high" data-i18n="quality.high" data-i18n-title="quality.high.hint">高</button><button data-q="lite" data-i18n="quality.lite" data-i18n-title="quality.lite.hint">輕量</button></div>
+  <span class="sep"></span>
+  <div class="seg mini" id="langSeg" aria-label="語言" data-i18n-aria="lang"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
+  <span class="hint toast" id="qualityHint" hidden></span>
+</div>
 <!-- 面板縮小後留下的小標籤，點了叫回來 -->
-<button class="tag panel" id="navTag" title="展開設定">⚙ 設定 ›</button>
-<button class="tag panel" id="dataTag" title="展開報告">‹ 報告<span id="dataTagKpi"></span></button>
+<button class="tag panel" id="navTag" title="展開設定" data-i18n-title="tag.nav.t"><span data-i18n="tag.nav">⚙ 設定 ›</span></button>
+<button class="tag panel" id="dataTag" title="展開報告" data-i18n-title="tag.data.t"><span data-i18n="tag.data">‹ 報告</span><span id="dataTagKpi"></span></button>
 <div class="tip panel" id="tip" hidden></div>
 
 <script type="module" src="js/app.js"></script>
