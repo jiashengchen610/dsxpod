@@ -291,16 +291,34 @@ function update() {
 // ---------------------------------------------------------------- 分頁、收合、顯示、提示、匯出
 function tabs(root) { $$(`${root} .tab`).forEach(t => t.onclick = () => { $$(`${root} .tab`).forEach(x => x.classList.toggle('active', x === t)); $$(`${root} .tabpane`).forEach(p => p.classList.toggle('active', p.dataset.pane === t.dataset.tab)); Object.values(charts).forEach(c => c.resize()); }); }
 $('#menuBtn').onclick = () => { document.body.classList.toggle('menu-open'); document.body.classList.remove('sheet-open'); };
-// 手機下方設定面板：點分頁展開（並切到該分頁）、再點已選的分頁收起；分頁列上下滑也可。兩個面板一次只開一個。
-const navToggle = (open) => { document.body.classList.toggle('menu-open', open); if (open) document.body.classList.remove('sheet-open'); };
+// 手機下方設定面板：三段高度 收合 / 一半 / 全高。點分頁打開到一半（並切到該分頁）、再點已選的分頁收起；
+// 拖把手或分頁列跟手改高度，放開吸附到最近的一段（快速甩動直接往甩的方向跳一段）。兩個面板一次只開一個。
+const navState = (st) => { const b = document.body.classList; b.toggle('menu-open', st !== 'closed'); b.toggle('menu-full', st === 'full'); if (st !== 'closed') b.remove('sheet-open'); };
+const navToggle = (open) => navState(open ? 'half' : 'closed');
+let navDragged = 0;
 $('#nav .tabs').addEventListener('click', e => {
   const tb = e.target.closest('.tab'); if (!tb || !document.body.classList.contains('mobile')) return;
+  if (performance.now() - navDragged < 350) { e.stopPropagation(); e.preventDefault(); return; }   // 剛拖完，不當成點擊
   navToggle(!(tb.classList.contains('active') && document.body.classList.contains('menu-open')));
 }, true);
-{ let y0 = null; $('#nav .tabs').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
-  $('#nav .tabs').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); navToggle(dy < 0); } }); }
+{ const nav = $('#nav'); let y0 = null, h0 = 0, t0 = 0, last = [0, 0], moved = false;
+  const heights = () => { const peek = parseFloat(getComputedStyle(document.body).getPropertyValue('--navPeek')) || 64, dash = parseFloat(getComputedStyle(document.body).getPropertyValue('--dashPeek')) || 58;
+    return { closed: peek, half: innerHeight * 0.5, full: innerHeight - dash - 6 }; };
+  const start = e => { if (!document.body.classList.contains('mobile')) return; y0 = e.touches[0].clientY; h0 = nav.offsetHeight; t0 = performance.now(); last = [y0, t0]; moved = false; };
+  const move = e => { if (y0 === null) return; const y = e.touches[0].clientY, dy = y - y0;
+    if (!moved && Math.abs(dy) < 8) return;
+    if (!moved) { moved = true; nav.classList.add('dragging'); }
+    const H = heights(); nav.style.height = `${Math.min(H.full, Math.max(H.closed, h0 - dy))}px`; last = [y, performance.now()]; e.preventDefault(); };
+  const end = e => { if (y0 === null) return; const wasMoved = moved; y0 = null; if (!wasMoved) return;
+    navDragged = performance.now(); nav.classList.remove('dragging');
+    const H = heights(), h = nav.offsetHeight, v = (e.changedTouches[0].clientY - last[0]) / Math.max(16, performance.now() - last[1]);   // px/ms，負 = 往上
+    const order = ['closed', 'half', 'full']; let st = order.reduce((a, k) => Math.abs(H[k] - h) < Math.abs(H[a] - h) ? k : a, 'closed');
+    if (Math.abs(v) > 0.5) st = v < 0 ? (order.find(k => H[k] > h + 4) || 'full') : ([...order].reverse().find(k => H[k] < h - 4) || 'closed');
+    nav.style.height = ''; navState(st); };
+  for (const el of [$('#navGrab'), $('#nav .tabs')]) { el.addEventListener('touchstart', start, { passive: true }); el.addEventListener('touchmove', move, { passive: false }); el.addEventListener('touchend', end); el.addEventListener('touchcancel', end); }
+  $('#navGrab').addEventListener('click', () => { if (performance.now() - navDragged > 350) navState(document.body.classList.contains('menu-open') ? 'closed' : 'half'); }); }
 // 手機上方儀表板：點一行切換展開，或上下滑（往下拉展開）
-const sheetToggle = (open) => { document.body.classList.toggle('sheet-open', open ?? !document.body.classList.contains('sheet-open')); if (document.body.classList.contains('sheet-open')) document.body.classList.remove('menu-open'); setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300); };
+const sheetToggle = (open) => { document.body.classList.toggle('sheet-open', open ?? !document.body.classList.contains('sheet-open')); if (document.body.classList.contains('sheet-open')) document.body.classList.remove('menu-open', 'menu-full'); setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300); };
 $('#sheetHead').onclick = () => sheetToggle();
 { let y0 = null; $('#sheetHead').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
   $('#sheetHead').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy > 0); } }); }
@@ -429,7 +447,7 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   if (Q.get('cam')) { scene.setView(Q.get('cam'), { animate: false }); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === Q.get('cam'))); }   // 分享 / 測試：直接指定鏡頭（site / size / cool / unit / skid）
   if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
   scene.setVisible({ shell: true, cooler: true, rack: false });
-  if (Q.get('panel') === 'menu') document.body.classList.add('menu-open'); if (Q.get('panel') === 'sheet') document.body.classList.add('sheet-open');   // 測試 / 分享用
+  if (Q.get('panel') === 'menu') document.body.classList.add('menu-open'); if (Q.get('panel') === 'full') document.body.classList.add('menu-open', 'menu-full'); if (Q.get('panel') === 'sheet') document.body.classList.add('sheet-open');   // 測試 / 分享用
   syncFocus(); scene.start();
   progress('build', 1); await paint();
   $('#loading').classList.add('done'); checkApi();

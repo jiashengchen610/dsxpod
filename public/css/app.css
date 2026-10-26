@@ -98,14 +98,20 @@ body:not(.mobile).nav-min #navTag,body:not(.mobile).data-min #dataTag{display:bl
 .menu-btn,.sheet-head{display:none}
 
 /* ---------------- 手機 / 窄螢幕：上方一行儀表板（點開往下看完整儀表板、細節、匯出）＋ 下方設定面板（氣候 / 單元 / 規模） ---------------- */
-body.mobile{--navPeek:50px;--dashPeek:58px}
+body.mobile{--navPeek:64px;--dashPeek:58px}
 body.mobile .brand,body.mobile .menu-btn,body.mobile #navCollapse{display:none}
 body.mobile .toolbar{position:static;border:0;border-top:1px solid var(--border);border-radius:0;background:none;backdrop-filter:none;box-shadow:none;flex:none;padding:8px 14px;flex-wrap:wrap;row-gap:8px}
 body.mobile .toolbar .fs,body.mobile .toolbar .fs+.sep{display:none}
-/* 下：設定面板（最高佔螢幕 50%，3D 中心點同時移到上緣 25%）。收合時只露出分頁列；點分頁展開、再點同一個分頁收起，也可上下滑 */
-body.mobile .nav{left:0;right:0;top:auto;bottom:0;width:auto;height:50vh;height:50dvh;max-height:none;border-radius:14px 14px 0 0;opacity:1;z-index:8;
-  transform:translateY(calc(100% - var(--navPeek) - env(safe-area-inset-bottom,0px)));padding-bottom:env(safe-area-inset-bottom,0px)}
-body.mobile.menu-open .nav{transform:none}
+/* 下：設定面板，三段高度：收合（只露分頁列）/ 一半（預設打開，3D 中心點移到上緣 25%）/ 全高（留上方一行儀表板）。
+   用高度而不是位移：每一段內容都能捲到底。拖把手或分頁列跟手改高度，放開吸附到最近的一段（app.js） */
+body.mobile .nav{left:0;right:0;top:auto;bottom:0;width:auto;max-height:none;border-radius:14px 14px 0 0;opacity:1;z-index:8;transform:none;
+  height:calc(var(--navPeek) + env(safe-area-inset-bottom,0px));padding-bottom:env(safe-area-inset-bottom,0px);transition:height .28s ease}
+body.mobile.menu-open .nav{height:50vh;height:50dvh}
+body.mobile.menu-open.menu-full .nav{height:calc(100vh - var(--dashPeek) - 6px);height:calc(100dvh - var(--dashPeek) - 6px)}
+body.mobile .nav.dragging{transition:none}
+.nav-grab{display:none}
+body.mobile .nav-grab{display:block;flex:none;height:14px;touch-action:none;cursor:grab;position:relative}
+body.mobile .nav-grab::after{content:"";position:absolute;left:50%;top:6px;width:40px;height:4px;margin-left:-20px;border-radius:2px;background:#ffffff40}
 body.mobile .nav .tabs{touch-action:none;border-bottom-color:transparent}
 body.mobile.menu-open .nav .tabs{border-bottom-color:var(--border)}
 body.mobile .nav .tabpane{flex:1}
