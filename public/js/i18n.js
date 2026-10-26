@@ -53,6 +53,8 @@ zh: {
   'size.units.mode': '貨櫃數量', 'size.units.label': '貨櫃（單元）數量', 'size.units.unit': '個',
   'home.btn': '⌂ 重設視角', 'home.t': '關閉剖面，回到透視視角（H）',
   'door.label': '櫃門', 'door.open': '打開', 'door.close': '關閉',
+  'warn.cap_units': '基地可放 {a} 個單元，超過 1 GW 上限，只放 {b} 個以內（集中排列）',
+  'warn.site_blocks': '基地切成 {n} 個區塊（{f} 個完整、{p} 個部分區塊，各帶一座變電站）；園區熱島為篩選估算，關鍵場址需 CFD 驗證',
   'product.label': '產品', 'cool.name.chilled_water': '列間冷卻＋氣冷冰水機',
   'note.warn.gadu': '<b class="warn">⚠ 這個 PUE 不能單獨看</b>：每年約 {h} 小時（最壞年 {hmax} h）外氣太熱、冰水機容量降額後不夠（額定為 35 °C 時 1.2 倍設計排熱，每高 1 K 少 2%），模型照算耗電但實際機櫃得降載。要全年滿載需加大冰水機或選較涼的場址。',
   'gadu.cool.note': 'GADU 的散熱是固定配置：列間 CDU／列間冷卻器＋氣冷冰水機，冰水溫度由機櫃型號決定（液冷 25 °C、氣冷 15 °C）。',
@@ -181,6 +183,8 @@ en: {
   'size.units.mode': 'Container count', 'size.units.label': 'Containers (units)', 'size.units.unit': 'units',
   'home.btn': '⌂ Reset view', 'home.t': 'Close the cutaway and return to the perspective view (H)',
   'door.label': 'Doors', 'door.open': 'Open', 'door.close': 'Closed',
+  'warn.cap_units': 'The site fits {a} units, above the 1 GW cap; placing up to {b} in a compact layout',
+  'warn.site_blocks': 'Site split into {n} blocks ({f} full, {p} partial, each with its own substation); campus heat island is a screening estimate, verify key sites with CFD',
   'product.label': 'Product', 'cool.name.chilled_water': 'In-row cooling + air-cooled chillers',
   'note.warn.gadu': '<b class="warn">⚠ Do not read this PUE on its own</b>: for about {h} h a year (worst year {hmax} h) the ambient is so hot that the derated chiller capacity falls short (rated at 1.2 × design heat at 35 °C, −2% per K above). The model still counts the energy, but the racks would have to throttle. Larger chillers or a cooler site would close the gap.',
   'gadu.cool.note': 'GADU cooling is a fixed configuration: in-row CDUs / in-row coolers on a chilled-water loop with packaged air-cooled chillers. Chilled-water temperature follows the rack SKU (DLC 25 °C, air-cooled 15 °C).',
@@ -267,7 +271,7 @@ const LAND_EN = { taoyuan: 'Humid subtropical (Cfa): paddies, bamboo and broadle
 const WARN_RX = [
   [/^超過上限 (\S+) MW，已截到上限$/, 'warn.cap_mw', ['v']], [/^基地邊長超過 (\S+) m，已截到上限$/, 'warn.cap_side', ['v']],
   [/^基地可放 (\d+) 個區塊，超過 1 GW 上限，只放 (\d+) 個/, 'warn.cap_blocks', ['a', 'b']], [/^基地太小/, 'warn.small', []],
-  [/^超過 (\d+) MW：切成 (\d+) 個區塊/, 'warn.campus', ['mw', 'n']], [/^補齊成完整陣列：需要 (\d+) 個 POD，配置 (\d+) 個（([\d.]+) MW）$/, 'warn.fill', ['a', 'b', 'mw']],
+  [/^超過 (\d+) MW：切成 (\d+) 個區塊/, 'warn.campus', ['mw', 'n']], [/^基地切成 (\d+) 個區塊（(\d+) 個完整 \d+ × \d+、(\d+) 個部分區塊/, 'warn.site_blocks', ['n', 'f', 'p']], [/^基地可放 (\d+) 個單元，超過 1 GW 上限，只放 (\d+) 個/, 'warn.cap_units', ['a', 'b']], [/^補齊成完整陣列：需要 (\d+) 個 POD，配置 (\d+) 個（([\d.]+) MW）$/, 'warn.fill', ['a', 'b', 'mw']],
 ];
 
 const store = { get() { try { return localStorage.getItem('dsxpod:lang'); } catch { return null; } }, set(v) { try { localStorage.setItem('dsxpod:lang', v); } catch {} } };

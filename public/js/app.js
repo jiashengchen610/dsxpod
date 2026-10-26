@@ -122,10 +122,27 @@ function planFor(c) {
 }
 // 基地滑桿上限：放滿 1 GW 需要的基地（依產品 / SKU）× 1.15；再大也不會多放單元
 const siteMaxSide = () => { const cap = plan({ mw: 1000, product: state.product, sku: state.sku }); return Math.min(1500, Math.ceil(Math.max(...cap.site_m) * 1.15 / 10) * 10); };
+// 切換規模模式時把目前的配置換算過去（三個模式同步）：單元數照帶、MW 用精確的 IT 功率（換回來同樣單元數）、
+// 基地找「剛好排出同樣單元數」的最小長寬（2 m 一格）
+function syncScale(to) {
+  if (!layout) return;
+  if (to === 'units') state.units = layout.n_pods;
+  else if (to === 'mw') state.mw = layout.it_mw;
+  else if (to === 'site') {                                     // 在目前外框附近找「基地排法剛好排出同樣單元數」的最小基地（10 m 一格）
+    const mx = siteMaxSide(), n = layout.n_pods, sku = state.product === 'gadu' ? state.sku : null, c2 = v => Math.ceil(v / 2) * 2;
+    let best = null;                                                // 2 m 一格、外框 ±30 m：10 m 一格太粗，常常湊不出剛好的列數 × 個數
+    for (let L = Math.max(30, c2(layout.site_m[0]) - 30); L <= Math.min(mx, c2(layout.site_m[0]) + 30); L += 2)
+      for (let W = Math.max(30, c2(layout.site_m[1]) - 30); W <= Math.min(mx, c2(layout.site_m[1]) + 30); W += 2) {
+        const got = plan({ siteL: L, siteW: W, product: state.product, sku }).n_pods, miss = Math.abs(got - n);
+        if (!best || miss < best.miss || (miss === best.miss && L * W < best.L * best.W)) best = { L, W, miss };
+      }
+    if (best) { state.siteL = best.L; state.siteW = best.W; }
+  }
+}
 function sizeUI() {
   const mx = siteMaxSide(); for (const id of ['#slRange', '#swRange']) $(id).max = mx;
   state.siteL = Math.min(state.siteL, mx); state.siteW = Math.min(state.siteW, mx);
-  $$('#sizeMode button').forEach(b => { b.classList.toggle('on', b.dataset.mode === state.sizeMode); b.onclick = () => { state.sizeMode = b.dataset.mode; sizeUI(); update(); }; });
+  $$('#sizeMode button').forEach(b => { b.classList.toggle('on', b.dataset.mode === state.sizeMode); b.onclick = () => { if (b.dataset.mode === state.sizeMode) return; syncScale(b.dataset.mode); state.sizeMode = b.dataset.mode; sizeUI(); update(); }; });
   $('#sizeMW').hidden = state.sizeMode !== 'mw'; $('#sizeSite').hidden = state.sizeMode !== 'site'; $('#sizeUnits').hidden = state.sizeMode !== 'units';
   const mu = maxUnits(); state.units = Math.min(Math.max(1, state.units || 1), mu);
   $('#unRange').max = mu; $('#unInput').max = mu; $('#unRange').value = state.units; $('#unInput').value = state.units; $('#unOut').textContent = fmt(state.units);

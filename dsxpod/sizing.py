@@ -70,15 +70,8 @@ def plan(mw=None, site_l=None, site_w=None, product="dsx_pod", sku=None):
     if max(L, W) > MAX_SIDE_M: warnings.append(f"基地邊長超過 {MAX_SIDE_M:g} m，已截到上限"); L, W = min(L, MAX_SIDE_M), min(W, MAX_SIDE_M)
     uL, uW = L - 2 * SETBACK, W - 2 * SETBACK
     rows, cols = max(0, int((uL + GAP_X) // PITCH_X)), max(0, int((uW - SUBSTATION_STRIP + GAP_Y) // U['py']))   # 單一陣列也留變電帶
-    bL, bW = block_dims(BLOCK_ROWS, BLOCK_COLS, U)
-    nbx, nby = max(0, int((uL + ROAD) // (bL + ROAD))), max(0, int((uW + ROAD) // (bW + SUBSTATION_STRIP + ROAD)))
-    max_blocks = int(MAX_MW // (BLOCK_PODS * U['mw']))
-    if rows * cols > BLOCK_PODS and nbx * nby >= 2:
-        if nbx * nby > max_blocks:
-            warnings.append(f"基地可放 {nbx * nby} 個區塊，超過 1 GW 上限，只放 {max_blocks} 個（集中排列）")
-        capped = nbx * nby > max_blocks
-        n_blocks = min(nbx * nby, max_blocks)
-        return _layout(n_blocks * BLOCK_PODS, warnings, requested=dict(site_l=L, site_w=W), nbx=None if capped else nbx, U=U)
+    if rows * cols > BLOCK_PODS:                 # 超過一個區塊：完整區塊 + 剩餘空間的部分區塊，把基地塞滿
+        return _pack_site(uL, uW, warnings, dict(site_l=L, site_w=W), U)
     # 單一陣列：照基地切出的列數 × 個數，但不超過一個區塊
     rows, cols = min(rows, BLOCK_PODS), min(cols, BLOCK_PODS)
     while rows * cols > BLOCK_PODS:
@@ -86,6 +79,55 @@ def plan(mw=None, site_l=None, site_w=None, product="dsx_pod", sku=None):
         else: cols -= 1
     if rows * cols == 0: warnings.append("基地太小，放不下一個 POD"); rows = cols = 1
     return _layout(rows * cols, warnings, requested=dict(site_l=L, site_w=W), grid=(rows, cols), U=U)
+
+
+MIN_PARTIAL_COLS = 4                       # 部分區塊（北側剩餘）至少 4 個單元寬才值得配一座變電站
+
+
+def _pack_site(uL, uW, warnings, requested, U):
+    """基地塞滿：東西向放 nbx 個完整區塊（4 列），剩下的長度做一個「少幾列」的區塊；南北向放 nby 個完整區塊（14 個），
+    剩下的寬度做一個「少幾個」的區塊。每塊各帶一座變電站（大小依容量）。總量不超過 1 GW（最後一塊減列）。"""
+    bl = lambda r: block_dims(r, BLOCK_COLS, U)[0]
+    bw = lambda c: block_dims(BLOCK_ROWS, c, U)[1]
+    nbx = max(0, int((uL + ROAD) // (bl(BLOCK_ROWS) + ROAD))); rem_l = uL - nbx * (bl(BLOCK_ROWS) + ROAD)
+    rx = min(BLOCK_ROWS - 1, max(0, int((rem_l + GAP_X) // PITCH_X)))
+    nby = max(0, int((uW + ROAD) // (bw(BLOCK_COLS) + SUBSTATION_STRIP + ROAD))); rem_w = uW - nby * (bw(BLOCK_COLS) + SUBSTATION_STRIP + ROAD)
+    cy = min(BLOCK_COLS - 1, max(0, int((rem_w - SUBSTATION_STRIP + GAP_Y) // U['py'])))
+    if cy < MIN_PARTIAL_COLS: cy = 0                         # 北側剩餘太窄（少於 4 個）：不為幾個單元另設一座變電站
+    xs = [BLOCK_ROWS] * nbx + ([rx] if rx else []); ys = [BLOCK_COLS] * nby + ([cy] if cy else [])
+    cap = int(MAX_MW / U['mw'] + 1e-9); possible = sum(xs) * sum(ys)
+    if possible > cap:                                        # 超過 1 GW：沿用電量模式的集中排列（接近正方形），不要排成一條長帶
+        warnings.append(f"基地可放 {possible} 個單元，超過 1 GW 上限，只放 {cap} 個以內（集中排列）")
+        return _layout(cap, warnings, requested, U=U)
+    blocks, pods, yo = [], [], 0.0
+    for c in ys:
+        xo = 0.0
+        for r0 in xs:
+            left = cap - len(pods); r = r0 if r0 * c <= left else left // c
+            if r <= 0: break
+            b, k, oy = len(blocks), r * c, yo + SUBSTATION_STRIP
+            blocks.append(dict(index=b, x=xo, y=oy, n_pods=k, rows=r, cols=c, length=bl(r), width=bw(c),
+                               substation=dict(x=xo, y=yo, l=bl(r), w=SUBSTATION_STRIP - 4, mw=round(k * U['mw'], 1))))
+            pods += [dict(block=b, x=xo + (q // c) * PITCH_X, y=oy + (q % c) * U['py']) for q in range(k)]
+            xo += bl(r0) + ROAD
+        yo += bw(c) + SUBSTATION_STRIP + ROAD
+    site = (max(b["x"] + b["length"] for b in blocks) + 2 * SETBACK, max(b["y"] + b["width"] for b in blocks) + 2 * SETBACK)
+    n_full = sum(1 for b in blocks if b["rows"] == BLOCK_ROWS and b["cols"] == BLOCK_COLS)
+    mode = "campus" if len(blocks) > 1 else "detail"
+    if mode == "campus":
+        warnings.append(f"基地切成 {len(blocks)} 個區塊（{n_full} 個完整 {BLOCK_ROWS} × {BLOCK_COLS}、{len(blocks) - n_full} 個部分區塊，各帶一座變電站）；園區熱島為篩選估算，關鍵場址需 CFD 驗證")
+    return _result(pods, blocks, site, mode, len(pods), warnings, requested, U)
+
+
+def _result(pods, blocks, site, mode, need, warnings, requested, U):
+    n_pods = len(pods); mw = n_pods * U['mw']
+    if n_pods > need: warnings.append(f"補齊成完整陣列：需要 {need} 個 POD，配置 {n_pods} 個（{mw:.1f} MW）")
+    cross = math.sqrt(site[0] * site[1])
+    r1 = lambda v: math.floor(v * 10 + 0.5) / 10            # 四捨五入（與 JS Math.round 一致；Python round 是銀行家捨入，.5 會不同）
+    return dict(mode=mode, n_pods=n_pods, need_pods=need, cross_width_m=r1(cross), it_mw=math.floor(mw * 1000 + 0.5) / 1000, pod_mw=U['mw'], n_blocks=len(blocks), blocks=blocks, pods=pods,
+                site_m=[r1(site[0]), r1(site[1])], area_ha=math.floor(site[0] * site[1] / 1e4 * 100 + 0.5) / 100,
+                pitch=dict(x=PITCH_X, y=U['py']), requested=requested, warnings=warnings,
+                product=U["product"], sku=U["sku"], unit_mw=U['mw'], chillers_per_unit=U["chillers"])
 
 
 def _layout(need, warnings, requested, grid=None, nbx=None, U=None):
@@ -103,35 +145,33 @@ def _layout(need, warnings, requested, grid=None, nbx=None, U=None):
         mode = "detail"
     else:
         full, left = divmod(need, BLOCK_PODS)
-        last_rows = math.ceil(left / BLOCK_COLS)                          # 最後一塊補成整列
-        if (full * BLOCK_PODS + last_rows * BLOCK_COLS) * U['mw'] > MAX_MW + 1e-9: last_rows = left // BLOCK_COLS
-        sizes = [BLOCK_ROWS] * full + ([last_rows] if last_rows else [])
+        last_rows = last_cols = 0                                          # 最後一塊：在可行的列數裡挑浪費最少的（如 40 = 4 × 10，不是 3 × 14）
+        if left:
+            last_rows, last_cols = min(((r, math.ceil(left / r)) for r in range(math.ceil(left / BLOCK_COLS), BLOCK_ROWS + 1)), key=lambda rc: (rc[0] * rc[1] - left, rc[0]))
+        cap_pods = int(MAX_MW / U['mw'] + 1e-9)
+        if full * BLOCK_PODS + last_rows * last_cols > cap_pods:
+            last_cols = (cap_pods - full * BLOCK_PODS) // last_rows if last_rows else 0
+            if last_cols <= 0: last_rows = last_cols = 0
+        sizes = [(BLOCK_ROWS, BLOCK_COLS)] * full + ([(last_rows, last_cols)] if last_rows else [])
         n_blocks = len(sizes)
         bL, bW = block_dims(BLOCK_ROWS, BLOCK_COLS, U)
         cell_x, cell_y = bL + ROAD, bW + SUBSTATION_STRIP + ROAD
         if nbx is None: nbx = math.ceil(math.sqrt(n_blocks * cell_y / cell_x))
         nby = math.ceil(n_blocks / nbx)
         blocks, pods = [], []
-        for b, r in enumerate(sizes):
+        for b, (r, c) in enumerate(sizes):
             bx, by = b % nbx, b // nbx
-            l_, w_ = block_dims(r, BLOCK_COLS, U)
+            l_, w_ = block_dims(r, c, U)
             ox, oy = bx * cell_x, by * cell_y + SUBSTATION_STRIP
-            k = r * BLOCK_COLS
-            blocks.append(dict(index=b, x=ox, y=oy, n_pods=k, rows=r, cols=BLOCK_COLS, length=l_, width=w_,
+            k = r * c
+            blocks.append(dict(index=b, x=ox, y=oy, n_pods=k, rows=r, cols=c, length=l_, width=w_,
                                substation=dict(x=ox, y=by * cell_y, l=l_, w=SUBSTATION_STRIP - 4, mw=round(k * U['mw'], 1))))
-            pods += [dict(block=b, x=ox + (i // BLOCK_COLS) * PITCH_X, y=oy + (i % BLOCK_COLS) * U['py']) for i in range(k)]
+            pods += [dict(block=b, x=ox + (i // c) * PITCH_X, y=oy + (i % c) * U['py']) for i in range(k)]
         n_pods = len(pods)
         site = (min(nbx, n_blocks) * cell_x - ROAD + 2 * SETBACK, nby * cell_y - ROAD + 2 * SETBACK)
         mode = "campus"
         warnings.append(f"超過 {(BLOCK_PODS * U['mw']):.0f} MW：切成 {n_blocks} 個區塊（每塊 {BLOCK_ROWS} × {BLOCK_COLS} = {BLOCK_PODS} POD，約 {(BLOCK_PODS * U['mw']):.0f} MW，各帶一座變電站）；園區熱島為篩選估算，關鍵場址需 CFD 驗證")
-    mw = n_pods * U['mw']
-    if n_pods > need: warnings.append(f"補齊成完整陣列：需要 {need} 個 POD，配置 {n_pods} 個（{mw:.1f} MW）")
-    cross = math.sqrt(site[0] * site[1])
-    r1 = lambda v: math.floor(v * 10 + 0.5) / 10            # 四捨五入（與 JS Math.round 一致；Python round 是銀行家捨入，.5 會不同）
-    return dict(mode=mode, n_pods=n_pods, need_pods=need, cross_width_m=r1(cross), it_mw=math.floor(mw * 1000 + 0.5) / 1000, pod_mw=U['mw'], n_blocks=len(blocks), blocks=blocks, pods=pods,
-                site_m=[r1(site[0]), r1(site[1])], area_ha=math.floor(site[0] * site[1] / 1e4 * 100 + 0.5) / 100,
-                pitch=dict(x=PITCH_X, y=U['py']), requested=requested, warnings=warnings,
-                product=U["product"], sku=U["sku"], unit_mw=U['mw'], chillers_per_unit=U["chillers"])
+    return _result(pods, blocks, site, mode, need, warnings, requested, U)
 
 
 if __name__ == "__main__":
