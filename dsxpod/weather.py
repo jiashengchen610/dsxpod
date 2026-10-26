@@ -19,13 +19,14 @@ try: OUT.mkdir(parents=True, exist_ok=True)       # 部署環境（Vercel）檔�
 except OSError: pass
 
 # 六個示範場址（2026-10-25 定案）
+# t_max_c：2005–2024 逐時最高氣溫（climate_summary.json extremes.t_max），造價模型估輔助冰水機容量用
 SITES = {
-    "taoyuan":  dict(name="桃園（台灣）",        lat=25.00, lon=121.30, tz="Asia/Taipei",      climate="亞熱帶濕熱"),
-    "johor":    dict(name="柔佛 Sedenak（馬來西亞）", lat=1.62, lon=103.57, tz="Asia/Kuala_Lumpur", climate="赤道濕熱"),
-    "phoenix":  dict(name="鳳凰城（美國亞利桑那）", lat=33.45, lon=-112.07, tz="America/Phoenix",  climate="沙漠乾熱"),
-    "dallas":   dict(name="達拉斯（美國德州）",   lat=32.78, lon=-96.80, tz="America/Chicago",  climate="濕潤副熱帶、波動大"),
-    "dublin":   dict(name="都柏林（愛爾蘭）",     lat=53.35, lon=-6.26, tz="Europe/Dublin",     climate="溫帶海洋"),
-    "oslo":     dict(name="奧斯陸（挪威）",       lat=59.91, lon=10.75, tz="Europe/Oslo",       climate="寒帶"),
+    "taoyuan":  dict(name="桃園（台灣）",        lat=25.00, lon=121.30, tz="Asia/Taipei",      climate="亞熱帶濕熱", t_max_c=37.9),
+    "johor":    dict(name="柔佛 Sedenak（馬來西亞）", lat=1.62, lon=103.57, tz="Asia/Kuala_Lumpur", climate="赤道濕熱", t_max_c=36.1),
+    "phoenix":  dict(name="鳳凰城（美國亞利桑那）", lat=33.45, lon=-112.07, tz="America/Phoenix",  climate="沙漠乾熱", t_max_c=47.7),
+    "dallas":   dict(name="達拉斯（美國德州）",   lat=32.78, lon=-96.80, tz="America/Chicago",  climate="濕潤副熱帶、波動大", t_max_c=42.9),
+    "dublin":   dict(name="都柏林（愛爾蘭）",     lat=53.35, lon=-6.26, tz="Europe/Dublin",     climate="溫帶海洋", t_max_c=27.3),
+    "oslo":     dict(name="奧斯陸（挪威）",       lat=59.91, lon=10.75, tz="Europe/Oslo",       climate="寒帶", t_max_c=33.0),
 }
 HOURLY = ["temperature_2m", "relative_humidity_2m", "dew_point_2m", "wind_speed_10m", "shortwave_radiation", "surface_pressure"]
 

@@ -126,8 +126,14 @@ body.mobile .data-grab::after{content:"";position:absolute;left:50%;top:6px;widt
 body.mobile:not(.sheet-open) .data > :not(.sheet-head):not(.data-grab){display:none}
 body.mobile.sheet-open .kstrip{display:none}   /* 展開後儀表板本身就有總量 */
 body.mobile .dash-head,body.mobile .more-btn{display:none}
-body.mobile .more{display:flex;flex:1}
-body.mobile .dash{padding-top:2px}
+/* 展開後一排分頁：總覽（儀表板 + 匯出）| 摘要 | 能耗 | 比較 | 氣候，一次只顯示一個（.more 攤平成 .data 的子項再排順序） */
+body.mobile .more{display:contents}
+body.mobile #data .tabs{order:1}body.mobile .dash{order:2}body.mobile .dash-status{order:3}
+body.mobile #data .tabpane{order:4}body.mobile #data .tabpane.active{flex:1;min-height:0;overflow:auto}
+body.mobile .export{order:5}body.mobile .data-grab{order:6}
+body.mobile.dtab-dash #data .tabpane{display:none}
+body.mobile:not(.dtab-dash) .dash,body.mobile:not(.dtab-dash) .dash-status,body.mobile:not(.dtab-dash) .export{display:none}
+body.mobile .dash{padding-top:12px}
 body.mobile .tabs .tab{font-size:12.5px;padding:7px 4px}
 body.mobile .kpi .v{font-size:19px}
 body.mobile .tip{max-width:min(260px,80vw)}
@@ -193,6 +199,13 @@ body.gadu .gadu-only{display:block}
 .more-btn:hover{color:var(--text);border-color:#ffffff40}
 .more-btn::after{content:" ▾"}body.more-open .more-btn::after{content:" ▴"}
 .more{display:none;flex-direction:column;min-height:0;flex:1;border-top:1px solid var(--border)}
+#data .tab[data-tab="dash"]{display:none}body.mobile #data .tab[data-tab="dash"]{display:block}
 body.more-open .more{display:flex}
 .more .tabpane.active{flex:1;min-height:0}
 body.gadu #data .tab[data-tab="cmp"]{display:none}
+
+/* 造價拆解（摘要） */
+h4.sub{margin:14px 0 4px;font-size:12.5px;font-weight:600;color:var(--muted)}
+table.cx td{padding:5px 4px;white-space:nowrap}table.cx td:first-child{white-space:normal}table.cx td:nth-child(3){color:var(--muted);width:60px}
+table.cx small{font-size:11px;color:var(--faint);margin-left:1px}
+table.cx tr.tot td{font-weight:650;border-bottom:0}

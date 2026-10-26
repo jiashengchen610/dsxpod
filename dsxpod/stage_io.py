@@ -214,6 +214,35 @@ def fallback_notes(p: Params):
     return [n for n in p.notes if "後備" in n]
 
 
+def read_cost_coef(stage):
+    """造價係數從 /World/Plant 的 cost:coef:* 讀回（usd_out.build 寫）。回傳 (dict, 缺少的鍵)；缺的用 capex.C 補。"""
+    from .capex import C
+    plant = stage.GetPrimAtPath(PLANT_PATH)
+    got, missing = {}, []
+    for k, v in C.items():
+        a = plant.GetAttribute(f"cost:coef:{k}") if plant else None
+        if a and a.HasValue(): got[k] = float(a.Get())
+        else: got[k] = v; missing.append(k)
+    return got, missing
+
+
+def site_t_max(stage, default=35.0):
+    a = stage.GetPrimAtPath("/World/Site").GetAttribute("aif:site:tMax20yC")
+    return float(a.Get()) if a and a.HasValue() else default
+
+
+def write_capex(stage, cx: dict, layer=None, basis=""):
+    """造價結果寫到 /World/Results/Capex（cost:total_usd、cost:it_usd、cost:facility_usd、cost:item:*）。"""
+    if layer is not None: stage.SetEditTarget(Usd.EditTarget(layer))
+    UsdGeom.Scope.Define(stage, RESULTS_PATH)
+    prim = stage.DefinePrim(f"{RESULTS_PATH}/Capex", "Scope")
+    def setd(n, v): prim.CreateAttribute(n, Sdf.ValueTypeNames.Double, custom=True).Set(float(v))
+    setd("cost:total_usd", cx["total"]); setd("cost:it_usd", cx["it"]); setd("cost:facility_usd", cx["facility"])
+    for k, v in cx["items"].items(): setd(f"cost:item:{k}", v)
+    if basis: prim.CreateAttribute("cost:basis", Sdf.ValueTypeNames.String, custom=True).Set(basis)
+    return prim
+
+
 def write_results(stage, site, variants: dict, annual_rows: list, hourly=None, layer=None, notes=None):
     """寫到 /World/Results/<site>/<variant 組合>。"""
     name = "__".join(f"{k}_{v}" for k, v in sorted(variants.items()) if k != "site").replace(".", "p").replace("-", "_")

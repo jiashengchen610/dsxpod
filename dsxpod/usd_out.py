@@ -553,6 +553,7 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
             attr(site, "aif:site:timezone", Sdf.ValueTypeNames.String, s["tz"])
             attr(site, "aif:site:climate", Sdf.ValueTypeNames.String, s["climate"])
             attr(site, "aif:site:weatherSource", Sdf.ValueTypeNames.String, "Open-Meteo ERA5 hourly 2005-2024")
+            attr(site, "aif:site:tMax20yC", Sdf.ValueTypeNames.Double, s["t_max_c"], "max hourly dry-bulb 2005-2024 (C); sizes the DSX trim chiller in the capex model")
     svs.SetVariantSelection(site_key)
 
     plant = UsdGeom.Xform.Define(stage, PLANT).GetPrim(); Usd.ModelAPI(plant).SetKind(Kind.Tokens.assembly)
@@ -561,6 +562,10 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     attr(plant, "aif:core:product", Sdf.ValueTypeNames.String, product, "dsx_pod | gadu (dsxpod/products.py)")
     attr(plant, "aif:spec:sku", Sdf.ValueTypeNames.String, sku); attr(plant, "aif:spec:skuName", Sdf.ValueTypeNames.String, sk["name"])
     attr(plant, "aif:spec:coolingMode", Sdf.ValueTypeNames.String, pr["cooling_mode"], "warm_water_dry (DSX POD) | chilled_water (GADU)")
+    from .capex import COEF                                   # 造價係數（設備與材料，美元；不含土地與施工人力）：數字在 USD，匯出時讀回再算
+    attr(plant, "cost:basis", Sdf.ValueTypeNames.String, "USD; racks + equipment + materials of all above-ground works; excludes land acquisition, construction labor, design fees and contingency; IT at ODM/hyperscale procurement basis")
+    for k, (v, unit, label, src, conf) in COEF.items():
+        attr(plant, f"cost:coef:{k}", Sdf.ValueTypeNames.Double, float(v), f"{label} [{unit}] -- {src} (confidence: {conf})")
     if product == "gadu":
         attr(plant, "aif:core:assetClass", Sdf.ValueTypeNames.String, "AI Factory site (GIGABYTE GADU units)")
         attr(plant, "aif:core:assetDescription", Sdf.ValueTypeNames.String,

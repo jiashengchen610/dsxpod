@@ -3,6 +3,7 @@
 import { plan } from './sizing.js';
 import { PodScene, ENV } from './scene.js';
 import { PRODUCTS, defaultSku, spec as prodSpec } from './products.js';   // 產品 / SKU 唯一來源（dsxpod/products.py 產生）
+import { capex } from './capex.js';                                           // 造價：dsxpod/capex.py 產生（同一套規則，係數也在 USD）
 import { t, lang, locale, setLang, applyStatic, siteName, koppenName, landName, warnText } from './i18n.js';
 applyStatic();                                                  // 靜態文字先套語言（載入畫面也要）
 
@@ -32,7 +33,10 @@ if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
 // 手機 / 窄螢幕：上方一行儀表板（點開看細節）、下方設定面板（點分頁展開）
 const MQ = matchMedia('(max-width: 900px)');
 const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open');
-  (MQ.matches ? $('#nav') : document.body).appendChild($('#toolbar')); };   // 工具列：桌機浮在左下，手機放進設定面板底部
+  (MQ.matches ? $('#nav') : document.body).appendChild($('#toolbar'));
+  // 手機上方面板預設「總覽」分頁；桌機沒有總覽分頁（儀表板常駐），回到摘要
+  const dt = $('#data .tab[data-tab="dash"]');
+  if (dt) { if (MQ.matches && !$('#data .tab.active')?.dataset.tab) dt.click(); if (!MQ.matches && dt.classList.contains('active')) $('#data .tab[data-tab="sum"]').click(); } };   // 工具列：桌機浮在左下，手機放進設定面板底部
 // 手機設定面板打開時，3D 中心點移到畫面上緣 25%（露出來那一半的中間），調參數時看得到模型
 const syncFocus = () => scene && scene.setFocusY(document.body.classList.contains('mobile') && document.body.classList.contains('menu-open') ? 0.25 : 0.5);
 new MutationObserver(syncFocus).observe(document.body, { attributes: true, attributeFilter: ['class'] });
@@ -121,15 +125,18 @@ $('#swRange').oninput = e => { state.siteW = +e.target.value; sizeUI(); update()
 
 // ---------------------------------------------------------------- 結果
 
-// 常駐儀表板：總算力 + 電力 / 用水 / 土地 / 造價（總量與每 EF）。數字變動時旁邊顯示 ▲▼ 百分比：
+// 常駐儀表板：總算力 + 電力 / 土地 / 造價（總量與每 EF）。用水不放（使用者 2026-10-26：畫面上的散熱都是閉迴路、冷卻不耗水）。數字變動時旁邊顯示 ▲▼ 百分比：
 // 和「上一次停下來的狀態」比（拖動中持續顯示，停 2.5 秒後淡出並把現狀當新基準）。
 let dashBase = null, dashTimer = null;
 const fmtMW = mw => mw >= 1000 ? `${fmt(mw / 1000, 2)}<small>GW</small>` : `${fmt(mw, mw < 100 ? 1 : 0)}<small>MW</small>`;
 const fmtN = v => fmt(v, v > 0 && v < 10 ? 1 : 0);
+const fmtUSD = (v, d) => v >= 1e9 ? `${fmt(v / 1e9, 2)}<small>B</small>` : `${fmt(v / 1e6, d ?? (v < 1e8 ? 1 : 0))}<small>M</small>`;
+let CX = null;                                                     // 目前配置的造價（capex.js）
 function dashboard(m) {
   const sk = SK(), ef = layout.n_pods * sk.pf_inf_total / 1000, gpus = layout.n_pods * sk.gpus;
-  const v = { ef, mw: layout.it_mw * m.pue_mean, water: m.water_m3, ha: layout.area_ha };
-  v.kw_ef = v.mw * 1000 / ef; v.w_ef = v.water / ef; v.m2_ef = v.ha * 1e4 / ef;
+  CX = capex(layout, state.product, skuKey(), state.cooling, m.recirc_k + m.island_k, CLIM[state.site].extremes.t_max);
+  const v = { ef, mw: layout.it_mw * m.pue_mean, ha: layout.area_ha, usd: CX.total };
+  v.kw_ef = v.mw * 1000 / ef; v.m2_ef = v.ha * 1e4 / ef; v.usd_ef = v.usd / ef;
   if (!dashBase) dashBase = v;
   const dl = (k, lowerIsGood) => {
     const a = dashBase[k], b = v[k];
@@ -140,9 +147,8 @@ function dashboard(m) {
   };
   const rows = [
     ['dash.power', 'dash.power.t', `${fmtMW(v.mw)}${dl('mw')}`, `${fmt(v.kw_ef)}<small>kW</small>${dl('kw_ef', true)}`],
-    ['dash.water', 'dash.water.t', `${fmt(v.water)}<small>m³</small>${dl('water')}`, `${fmtN(v.w_ef)}<small>m³</small>${dl('w_ef', true)}`],
     ['dash.land', 'dash.land.t', `${fmt(v.ha, v.ha < 100 ? 2 : 0)}<small>ha</small>${dl('ha')}`, `${fmtN(v.m2_ef)}<small>m²</small>${dl('m2_ef', true)}`],
-    ['dash.cost', 'dash.cost.soon', '—', '—'],
+    ['dash.cost', 'dash.cost.t', `$${fmtUSD(v.usd)}${dl('usd')}`, `$${fmtUSD(v.usd_ef, 2)}${dl('usd_ef', true)}`],
   ];
   $('#dash').innerHTML = `<div class="dash-top"><b>${fmt(ef, ef < 100 ? 1 : 0)}<small>EF</small>${dl('ef')}</b><span>${isGadu() ? t('kpi.compute.g', { gpus: fmt(gpus), model: sk.name }) : t('kpi.compute', { gpus: fmt(gpus) })}</span></div>` +
     `<table class="dash-t"><thead><tr><th></th><th>${t('dash.total')}</th><th>${t('dash.perEF')}</th></tr></thead><tbody>` +
@@ -152,8 +158,8 @@ function dashboard(m) {
     (given ? `<br>${t('dash.landuse', { used: fmt(v.ha, 2), given: fmt(given, 2) })}` : '') + (m.valid ? '' : `<span class="warn">${t('dash.gap', { h: fmt(m.unmet_h) })}</span>`);
   // 手機上方一行：五個總量，長數字用簡寫（1.2K、3.4萬）避免截斷
   const cpt = x => x >= 10000 ? new Intl.NumberFormat(locale(), { notation: 'compact', maximumFractionDigits: 1 }).format(x) : fmt(x, x < 100 && x % 1 ? 1 : 0);
-  $('#kpiStrip').innerHTML = [[`${cpt(ef)} EF`, t('strip.compute')], [v.mw >= 1000 ? `${fmt(v.mw / 1000, 2)} GW` : `${fmt(v.mw, v.mw < 100 ? 1 : 0)} MW`, t('strip.power')], [`${cpt(v.water)} m³`, t('strip.water')],
-    [`${fmt(v.ha, v.ha < 10 ? 2 : v.ha < 100 ? 1 : 0)} ha`, t('strip.land')], ['—', t('strip.cost')]].map(([a, l]) => `<div><b>${a}</b><span>${l}</span></div>`).join('');
+  $('#kpiStrip').innerHTML = [[`${cpt(ef)} EF`, t('strip.compute')], [v.mw >= 1000 ? `${fmt(v.mw / 1000, 2)} GW` : `${fmt(v.mw, v.mw < 100 ? 1 : 0)} MW`, t('strip.power')],
+    [`${fmt(v.ha, v.ha < 10 ? 2 : v.ha < 100 ? 1 : 0)} ha`, t('strip.land')], [`$${fmtUSD(v.usd).replace(/<\/?small>/g, '')}`, t('strip.cost')]].map(([a, l]) => `<div><b>${a}</b><span>${l}</span></div>`).join('');
   $('#dataTagKpi').textContent = `${fmt(ef, ef < 100 ? 1 : 0)} EF`;
   clearTimeout(dashTimer); dashTimer = setTimeout(() => { dashBase = v; $$('#dash .dl').forEach(e => e.classList.add('fade')); }, 2500);
 }
@@ -179,7 +185,12 @@ function kpis(m) {
   const notes = [t(isGadu() ? 'note.layout.gadu' : 'note.layout', { pods: fmt(layout.n_pods), model: sk.name, racks: fmt(racks), mw: fmt(layout.it_mw, 1), l: fmt(layout.site_m[0]), w: fmt(layout.site_m[1]), ha: fmt(layout.area_ha, 2),
     blocks: layout.n_blocks > 1 ? t('note.blocks', { n: layout.n_blocks }) : '' })];
   if (!m.valid) notes.unshift(t(isGadu() ? 'note.warn.gadu' : 'note.warn', { h, hmax, sup: supLabel(state.supply) }));
-  $('#sumNotes').innerHTML = '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>' +
+  notes.push(t('note.water'));
+  const grp = { 'cx.compute': ['compute'], 'cx.network': ['network'], 'cx.unit': ['container', 'cdu', 'inrow'], 'cx.cooling': ['dry_cooler', 'chiller'], 'cx.power': ['power_center', 'substation'], 'cx.site': ['site_works', 'buildings'] };
+  const capexTable = `<h4 class="sub">${t('cx.title')}</h4><table class="cx"><tbody>` + Object.entries(grp).map(([k, ks]) => { const u = ks.reduce((a, x) => a + (CX.items[x] || 0), 0);
+    return `<tr><td>${t(k)}</td><td>$${fmtUSD(u, u < 1e7 ? 2 : 1)}</td><td>${fmt(u / CX.total * 100, u / CX.total < 0.01 ? 2 : 1)}%</td></tr>`; }).join('') +
+    `<tr class="tot"><td>${t('cx.total')}</td><td>$${fmtUSD(CX.total)}</td><td>100%</td></tr></tbody></table><p class="hint">${t('cx.hint')}</p>`;
+  $('#sumNotes').innerHTML = capexTable + '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>' +
     `<details><summary>${t('note.more')}</summary><ul><li>${t(isGadu() ? 'note.gadu' : 'note.rubin')}</li><li>${t('note.screen')}</li></ul></details>`;
 }
 
@@ -205,8 +216,8 @@ function mixChart(m) {
 }
 
 function cmpTable(all) {
-  $('#cmpTable').innerHTML = `<table><thead><tr><th>${t('cmp.strategy')}</th><th>PUE</th><th>${t('cmp.unmet')}</th><th>${t('cmp.chiller')}</th><th>${t('cmp.water')}</th></tr></thead><tbody>` +
-    coolKeys().filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === state.cooling ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table>';
+  $('#cmpTable').innerHTML = `<table><thead><tr><th>${t('cmp.strategy')}</th><th>PUE</th><th>${t('cmp.unmet')}</th><th>${t('cmp.chiller')}</th><th>${t('cmp.capex')}</th></tr></thead><tbody>` +
+    coolKeys().filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === state.cooling ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>$${fmtUSD(capex(layout, state.product, skuKey(), c, m.recirc_k + m.island_k, CLIM[state.site].extremes.t_max).total, 1)}</td></tr>`; }).join('') + '</tbody></table>';
 }
 
 function climCharts() {
@@ -435,6 +446,8 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   const langUI = () => $$('#langSeg button').forEach(b => { b.classList.toggle('on', b.dataset.lang === lang); b.onclick = () => { if (!setLang(b.dataset.lang)) return; langUI(); siteCards(); productUI(); unitFacts(); setMin('nav', document.body.classList.contains('nav-min')); update(); exportUI(); scene.setLayout(layout); }; });
   langUI();
   tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); productUI();
+  $$('#data .tab').forEach(b => b.addEventListener('click', () => document.body.classList.toggle('dtab-dash', b.dataset.tab === 'dash')));
+  if (MQ.matches && !Q.get('tab')) $('#data .tab[data-tab="dash"]').click();
   // 分鏡：每個設定分頁一個鏡頭（氣候 = 全景、單元 = 貨櫃剖面、規模 = 整個基地）
   $$('#nav .tab').forEach(t => t.addEventListener('click', () => { scene.setView(t.dataset.tab); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === 'unit')); }));
   $$('#unitSeg button').forEach(b => b.onclick = () => { $$('#unitSeg button').forEach(x => x.classList.toggle('on', x === b)); scene.setView(b.dataset.view); });
