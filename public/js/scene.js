@@ -8,6 +8,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { FxLayer } from './fx.js';
+import { FpsGate } from './perf.js';
 
 const L = 12.192, W = 2.438, CH = 2.896, MH = 3.2;            // 貨櫃長寬高、散熱模組高
 const SETBACK = 10;                                             // 與 sizing 一致：佈局原點在退縮線內 10 m
@@ -870,7 +871,8 @@ export class PodScene {
   }
 
   start(onFrame) {
-    let last = 0; const dts = [];
+    let last = 0; const gate = new FpsGate();
+    this.bench = 45;                                               // 載入後先強制畫 45 幀量效能（不必等使用者拖動）
     const loop = (now) => {
       requestAnimationFrame(loop);
       if (this.tween) {                                          // 分鏡轉場（easeInOutCubic）
@@ -880,6 +882,7 @@ export class PodScene {
         this.dirty = true;
       }
       const moved = this.controls.update();
+      if (this.bench > 0 && this.autoDowngrade && this.quality === 'high' && this.layout) { this.bench--; this.dirty = true; }
       if (!moved && !this.dirty) { last = 0; return; }                    // 按需渲染：沒變化就不畫
       this.dirty = false;
       this.sky.position.copy(this.camera.position); const lod = this.updateLod(); onFrame && onFrame(lod);
@@ -891,12 +894,8 @@ export class PodScene {
       }
       this.renderer.render(this.scene, this.camera);
       this.fx.update(this.camera, innerWidth, innerHeight, !this.cut);   // 剖面視角不畫疊層（燈會穿過貨櫃）           // 只在重畫的那一幀重新投影疊層
-      // 自動降級：連續互動中量 60 個影格，中位數 > 45 ms（約 < 22 fps）就切省電畫質（只做一次）
-      if (this.autoDowngrade && this.quality === 'high' && last && now - last < 250) {
-        dts.push(now - last);
-        if (dts.length >= 60) { const med = dts.sort((a, b) => a - b)[30]; dts.length = 0; this.autoDowngrade = false;
-          if (med > 45) this.setQuality('lite', { fps: Math.round(1000 / med) }); }
-      }
+      // 自動降級（使用者沒手動選畫質時）：連續重畫的影格間隔交給 FpsGate 判斷（規則見 perf.js）
+      if (this.autoDowngrade && this.quality === 'high' && last) { const fps = gate.push(now - last); if (fps) this.setQuality('lite', { fps }); }
       last = now;
     };
     requestAnimationFrame(loop);
