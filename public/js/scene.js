@@ -310,7 +310,8 @@ export class PodScene {
     this.highlight = new THREE.Box3Helper(new THREE.Box3(), ACCENT); this.highlight.visible = false; this.scene.add(this.highlight);
     this.subParts = substationTemplate(); this.subSets = []; this.subHit = null;
     this.gravelTex = noiseTex(['#8e8f89', '#7f807a', '#a0a19a', '#727470'], { blobs: 500, rMin: 2, rMax: 10, speck: 16000, seed: 3 });
-    addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); r.setSize(innerWidth, innerHeight); this.dirty = true; });
+    this.focusY = this.curFocusY = 0.5;                            // 目標點在畫面上的高度比例（0.5 = 正中）；手機設定面板打開時移到 0.25
+    addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this._applyFocus(); r.setSize(innerWidth, innerHeight); this.dirty = true; });
     this.fx = new FxLayer(document.getElementById('fx')); this.fx.setLite(quality !== 'high');   // 熱氣 / 閃燈：DOM 疊層（見 fx.js）
     this.controls.addEventListener('change', () => { this.dirty = true; });
     this.controls.addEventListener('start', () => { this.tween = null; });          // 使用者一拖動就交還控制
@@ -436,6 +437,13 @@ export class PodScene {
   }
 
   setAnim(on) { this.fx.setOn(on); this.dirty = true; }
+
+  // 畫面中心點的高度（比例）：用投影的視窗偏移平移畫面，鏡頭位置與角度不變；點選與疊層投影都跟著對齊
+  setFocusY(f) { this.focusY = f; this.dirty = true; }
+  _applyFocus() {
+    const W = innerWidth, H = innerHeight, off = (0.5 - this.curFocusY) * H;
+    if (Math.abs(off) < 0.5) this.camera.clearViewOffset(); else this.camera.setViewOffset(W, H, 0, off, W, H);
+  }
   get animOn() { return this.fx.on; }
 
   // 疊層錨點：散熱器頂（DSX 散熱模組 / GADU 冰水機）冒熱氣、POD 正面狀態燈、電力中心燈、變電站門型架航空障礙燈
@@ -880,6 +888,10 @@ export class PodScene {
         this.camera.position.lerpVectors(this.tween.p0, this.tween.p1, e); this.controls.target.lerpVectors(this.tween.t0, this.tween.t1, e);
         if (t >= 1) this.tween = null;
         this.dirty = true;
+      }
+      if (Math.abs(this.focusY - this.curFocusY) > 1e-3) {              // 中心點平滑移動（約 0.25 秒，跟面板動畫同步）
+        this.curFocusY += (this.focusY - this.curFocusY) * 0.22; if (Math.abs(this.focusY - this.curFocusY) <= 1e-3) this.curFocusY = this.focusY;
+        this._applyFocus(); this.dirty = true;
       }
       const moved = this.controls.update();
       if (this.bench > 0 && this.autoDowngrade && this.quality === 'high' && this.layout) { this.bench--; this.dirty = true; }

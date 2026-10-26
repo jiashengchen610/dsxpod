@@ -23,7 +23,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/
 .brand-title::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accent);margin-right:8px;vertical-align:1px}
 .brand-sub{color:var(--muted);font-size:12.5px;margin-top:2px}
 .nav{left:16px;top:84px;width:340px;max-height:calc(100% - 160px);display:flex;flex-direction:column;overflow:hidden}
-.data{right:16px;top:16px;width:400px;max-height:calc(100% - 32px);display:flex;flex-direction:column;overflow:hidden}
+.data{right:16px;top:16px;width:360px;max-height:calc(100% - 32px);display:flex;flex-direction:column;overflow:hidden}
 .tabs{display:flex;gap:2px;padding:6px;border-bottom:1px solid var(--border);flex:none}
 .tab{flex:1;background:none;border:0;color:var(--muted);padding:8px 6px;border-radius:8px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
 .tab:hover{color:var(--text);background:#ffffff0d}.tab.active{color:var(--text);background:#ffffff17}
@@ -97,34 +97,35 @@ body:not(.mobile).nav-min #navTag,body:not(.mobile).data-min #dataTag{display:bl
 .seg.preset button{border-style:dashed}.seg.preset button.on{border-style:solid}
 .menu-btn,.sheet-head{display:none}
 
-/* ---------------- 手機 / 窄螢幕：漢堡選單（設定）+ 底部面板（報告） ---------------- */
-body.mobile{--peek:78px}
-body.mobile .toolbar{position:static;border:0;border-top:1px solid var(--border);border-radius:0;background:none;backdrop-filter:none;box-shadow:none;flex:none;padding:8px 14px}
+/* ---------------- 手機 / 窄螢幕：上方一行儀表板（點開往下看完整儀表板、細節、匯出）＋ 下方設定面板（氣候 / 單元 / 規模） ---------------- */
+body.mobile{--navPeek:50px;--dashPeek:58px}
+body.mobile .brand,body.mobile .menu-btn,body.mobile #navCollapse{display:none}
+body.mobile .toolbar{position:static;border:0;border-top:1px solid var(--border);border-radius:0;background:none;backdrop-filter:none;box-shadow:none;flex:none;padding:8px 14px;flex-wrap:wrap;row-gap:8px}
 body.mobile .toolbar .fs,body.mobile .toolbar .fs+.sep{display:none}
-body.mobile .toolbar{flex-wrap:wrap;row-gap:8px}   /* 畫質 / 動態 / 語言三組：窄螢幕自動換行 */
-body.mobile .menu-btn{display:grid;place-items:center;left:10px;top:10px;width:44px;height:44px;font-size:20px;color:var(--text);cursor:pointer;padding:0;z-index:6}
-body.mobile .brand{left:62px;right:10px;top:10px;padding:6px 12px;max-width:none}
-body.mobile .brand-title{font-size:13.5px}
-body.mobile .brand-sub{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-body.mobile .nav{left:0;top:0;bottom:var(--peek);width:min(88vw,380px);max-height:none;border-radius:0 14px 14px 0;transform:translateX(-105%);opacity:1;z-index:8}
+/* 下：設定面板（最高佔螢幕 50%，3D 中心點同時移到上緣 25%）。收合時只露出分頁列；點分頁展開、再點同一個分頁收起，也可上下滑 */
+body.mobile .nav{left:0;right:0;top:auto;bottom:0;width:auto;height:50vh;height:50dvh;max-height:none;border-radius:14px 14px 0 0;opacity:1;z-index:8;
+  transform:translateY(calc(100% - var(--navPeek) - env(safe-area-inset-bottom,0px)));padding-bottom:env(safe-area-inset-bottom,0px)}
 body.mobile.menu-open .nav{transform:none}
+body.mobile .nav .tabs{touch-action:none;border-bottom-color:transparent}
+body.mobile.menu-open .nav .tabs{border-bottom-color:var(--border)}
 body.mobile .nav .tabpane{flex:1}
-body.mobile .data{left:0;right:0;bottom:0;top:auto;width:auto;height:min(74vh,640px);max-height:none;border-radius:14px 14px 0 0;
-  transform:translateY(calc(100% - var(--peek)));z-index:7}
-body.mobile.sheet-open .data{transform:none}
-body.mobile:not(.sheet-open) .data .export{display:none}
-body.mobile .sheet-head{display:block;flex:none;cursor:pointer;padding:6px 10px 8px;touch-action:none}
-body.mobile .grab{width:40px;height:4px;border-radius:2px;background:#ffffff40;margin:0 auto 6px}
-.kstrip{display:grid;grid-template-columns:1fr 1.15fr .95fr 1fr;gap:8px}
-.kstrip div{min-width:0}
-.kstrip b{display:block;font-size:15px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.2;white-space:nowrap}
-.kstrip span{display:block;font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kstrip .bad b{color:var(--bad)}.kstrip .good b{color:var(--text)}
+/* 上：一行儀表板。點一下往下展開 */
+body.mobile .data{left:0;right:0;top:0;bottom:auto;width:auto;max-height:var(--dashPeek);border-radius:0 0 14px 14px;z-index:7;transition:max-height .28s ease}
+body.mobile.sheet-open .data{max-height:min(82vh,720px)}
+body.mobile .sheet-head{display:flex;flex-direction:column;flex:none;cursor:pointer;padding:8px 10px 4px;touch-action:none}
+body.mobile .grab{order:2;width:40px;height:4px;border-radius:2px;background:#ffffff40;margin:5px auto 0}
+body.mobile.sheet-open .kstrip{display:none}   /* 展開後儀表板本身就有總量 */
+body.mobile .dash-head,body.mobile .more-btn{display:none}
+body.mobile .more{display:flex;flex:1}
+body.mobile .dash{padding-top:2px}
 body.mobile .tabs .tab{font-size:12.5px;padding:7px 4px}
 body.mobile .kpi .v{font-size:19px}
 body.mobile .tip{max-width:min(260px,80vw)}
-
-@media (max-width:380px){.kstrip b{font-size:14px}.kstrip{gap:6px}body.mobile .brand-title{font-size:13px}}
+/* 一行儀表板：欄寬依內容、字級隨螢幕縮放，不截斷（長數字在 app.js 用簡寫） */
+.kstrip{display:grid;grid-template-columns:repeat(5,auto);justify-content:space-between;gap:4px}
+.kstrip div{text-align:center}
+.kstrip b{display:block;font-size:clamp(12.5px,3.7vw,15px);font-weight:650;font-variant-numeric:tabular-nums;line-height:1.2;white-space:nowrap}
+.kstrip span{display:block;font-size:10.5px;color:var(--muted);white-space:nowrap}
 
 /* 產品切換（nav 分頁下方） */
 .product-bar{display:flex;align-items:center;gap:8px;padding:8px 14px 0;font-size:12.5px;color:var(--muted);flex:none;flex-wrap:wrap}
@@ -133,7 +134,6 @@ body.mobile .tip{max-width:min(260px,80vw)}
 .sku{background:#0006;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 8px;font:inherit;font-size:12.5px;max-width:100%}
 .gadu-only{display:none}
 body.gadu .gadu-only{display:block}
-body.gadu [data-pane="cool"] > :not(.gadu-only){display:none}
 
 /* 環境動態疊層（fx.js）：只動 transform / opacity，交給合成器 */
 .fx{position:fixed;inset:0;pointer-events:none;overflow:hidden;contain:strict}
@@ -155,3 +155,34 @@ body.gadu [data-pane="cool"] > :not(.gadu-only){display:none}
 .fx-power>i{background:radial-gradient(closest-side,#e0f2ff 0 18%,#1e90ff 32%,rgba(30,144,255,.3) 58%,rgba(30,144,255,0));animation:fx-breathe 2s ease-in-out infinite;animation-delay:calc(var(--d) * 1s)}
 @keyframes fx-breathe{0%,100%{opacity:.35}50%{opacity:1}}
 @media (prefers-reduced-motion:reduce){.fx>div>i{animation-duration:0s!important}}
+
+/* ---------------- IA 改版：單元分頁的產品列與自動散熱；右側儀表板 + 細節收合 ---------------- */
+.tabpane .product-bar{padding:0 0 4px}
+.reco{background:#76b90012;border:1px solid #76b90040;border-radius:9px;padding:9px 11px;font-size:12.5px;color:var(--text);line-height:1.5;margin:4px 0 12px}
+.reco b{font-weight:650}.reco small{display:block;color:var(--faint);font-size:11.5px;margin-top:4px}
+.dash-head{display:flex;justify-content:space-between;align-items:center;padding:8px 8px 0 14px;color:var(--muted);font-size:12px;flex:none}
+.dash{padding:4px 14px 2px;flex:none}
+.dash-top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.dash-top b{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.dash-top b small{font-size:14px;font-weight:600;color:var(--muted);margin-left:3px}
+.dash-top span{color:var(--muted);font-size:12px}
+.dash-t{margin-top:8px}
+.dash-t th,.dash-t td{padding:5px 4px;white-space:nowrap}
+.dash-t thead th{font-size:11px;color:var(--faint);font-weight:500;border-bottom:1px solid var(--border)}
+.dash-t tbody th{text-align:left;color:var(--muted);font-weight:500}
+.dash-t td{font-size:14px;font-weight:600;color:var(--text)}
+.dash-t td.pe{color:var(--muted);font-weight:500;font-size:13px}
+.dash-t tr:last-child th,.dash-t tr:last-child td{border-bottom:0}
+.dash-t small{font-size:11px;color:var(--faint);font-weight:500;margin-left:2px}
+.dl{display:inline-block;font-style:normal;font-size:10.5px;font-weight:600;margin-left:5px;padding:0 4px;border-radius:4px;background:#ffffff12;color:var(--muted);vertical-align:1px;transition:opacity .6s}
+.dl.good{color:#7fe07f;background:#0ca30c26}.dl.bad{color:#ffc56b;background:#fab21922}
+.dl.fade{opacity:0}
+.dash-status{padding:2px 14px 8px;font-size:11.5px;color:var(--faint);flex:none}
+.dash-status .warn{display:block;margin:4px 0 0;font-size:11.5px}
+.more-btn{flex:none;margin:0 14px 10px;background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted);font:inherit;font-size:12.5px;padding:6px;cursor:pointer}
+.more-btn:hover{color:var(--text);border-color:#ffffff40}
+.more-btn::after{content:" ▾"}body.more-open .more-btn::after{content:" ▴"}
+.more{display:none;flex-direction:column;min-height:0;flex:1;border-top:1px solid var(--border)}
+body.more-open .more{display:flex}
+.more .tabpane.active{flex:1;min-height:0}
+body.gadu #data .tab[data-tab="cmp"]{display:none}

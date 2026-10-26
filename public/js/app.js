@@ -1,4 +1,4 @@
-// DSX POD 場址模擬（MVP）：六選一氣候帶 → 電量或基地 → 散熱與供水 → 看能耗 → 匯出 USD 與參數。
+// DSX POD 場址模擬（MVP）：氣候 → 單元（產品 / SKU；散熱自動）→ 規模（基地或電量）→ 儀表板 → 匯出 USD 與參數。
 // 結果用預算結果表（dsxpod/precompute.py）在 log(MW) 上內插；匯出呼叫本機或部署的 /api/export。
 import { plan } from './sizing.js';
 import { PodScene, ENV } from './scene.js';
@@ -11,10 +11,10 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const fmt = (v, d = 0) => v == null || Number.isNaN(v) ? '–' : Number(v).toLocaleString(locale(), { minimumFractionDigits: d, maximumFractionDigits: d });
 const COOL = { dry_only: 'cool.name.dry_only', dry_plus_chiller: 'cool.name.dry_plus_chiller', evaporative: 'cool.name.evaporative', chilled_water: 'cool.name.chilled_water' };   // 顯示用 t(COOL[c])
 const SUP = { t45: '45 °C', t32: '32 °C', t28: 'CHW 25 °C' };
-// 每種產品可用的旋鈕（與 dsxpod/variants.COOLING_BY_PRODUCT / SUPPLY_BY_PRODUCT 一致）
-const PCOOL = { dsx_pod: ['dry_only', 'dry_plus_chiller', 'evaporative'], gadu: ['chilled_water'] };
-const PSUP = { dsx_pod: ['t45', 't32'], gadu: ['t28'] };
-const coolKeys = () => PCOOL[state.product], supKeys = () => PSUP[state.product];
+// 畫面上出現的散熱方式（模型與結果表另有蒸發式、32 °C 供水，使用者 2026-10-26 決定只從畫面拿掉）。
+// 散熱不是旋鈕：DSX 用 autoCool() 依 20 年逐時結果決定，GADU 固定冰水機。
+const PCOOL = { dsx_pod: ['dry_only', 'dry_plus_chiller'], gadu: ['chilled_water'] };
+const coolKeys = () => PCOOL[state.product];
 const skuKey = () => state.sku || defaultSku(state.product);
 const PR = () => PRODUCTS[state.product], SK = () => prodSpec(state.product, state.sku)[1];
 const isGadu = () => state.product === 'gadu';
@@ -26,13 +26,16 @@ const RUBIN = { gpus: 72, pf_inf: 3600, pf_train: 2500 };
 
 const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('dsxpod:' + k, JSON.stringify(v)); } catch {} } };
-const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', preset: null, product: 'dsx_pod', sku: null }, store.get('state', {}));
+const state = Object.assign({ site: 'johor', sizeMode: 'site', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', product: 'dsx_pod', sku: null }, store.get('state', {}));
 if (!PRODUCTS[state.product]) state.product = 'dsx_pod';
 if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
-// 手機 / 窄螢幕：設定進漢堡選單、報告進底部面板
+// 手機 / 窄螢幕：上方一行儀表板（點開看細節）、下方設定面板（點分頁展開）
 const MQ = matchMedia('(max-width: 900px)');
 const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open');
   (MQ.matches ? $('#nav') : document.body).appendChild($('#toolbar')); };   // 工具列：桌機浮在左下，手機放進設定面板底部
+// 手機設定面板打開時，3D 中心點移到畫面上緣 25%（露出來那一半的中間），調參數時看得到模型
+const syncFocus = () => scene && scene.setFocusY(document.body.classList.contains('mobile') && document.body.classList.contains('menu-open') ? 0.25 : 0.5);
+new MutationObserver(syncFocus).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 applyMobile(); MQ.addEventListener?.('change', () => { applyMobile(); setTimeout(() => { Object.values(charts).forEach(c => c.resize()); scene && scene.frame(); }, 300); });
 // 畫質：網址 q= > 使用者上次選的 > 預設高畫質（太慢會自動降到輕量）
 function initialQuality() {
@@ -42,9 +45,9 @@ function initialQuality() {
   return { q: 'high', auto: true };
 }
 const QUALITY = initialQuality();
-// 網址參數可覆寫（分享 / 測試用）：?site=phoenix&mw=200&cooling=evaporative&supply=t32&tab=cmp&nav=cool
+// 網址參數可覆寫（分享 / 測試用）：?site=phoenix&mw=200&product=gadu&sku=hgx_b300&tab=cmp&nav=unit（散熱與供水由 autoCool 決定，不收網址參數）
 const Q = new URLSearchParams(location.search);
-for (const k of ['site', 'cooling', 'supply', 'product', 'sku']) if (Q.get(k)) state[k] = Q.get(k);
+for (const k of ['site', 'product', 'sku']) if (Q.get(k)) state[k] = Q.get(k);
 if (!PRODUCTS[state.product]) state.product = 'dsx_pod'; if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
 if (Q.get('mw')) { state.sizeMode = 'mw'; state.mw = +Q.get('mw'); }
 if (Q.get('site_l') && Q.get('site_w')) { state.sizeMode = 'site'; state.siteL = +Q.get('site_l'); state.siteW = +Q.get('site_w'); }
@@ -73,16 +76,14 @@ function interp(site, cooling, supply, itMW) {
   return out;
 }
 
-function recommend(site, supply, itMW) {
-  const r = coolKeys().map(c => ({ c, m: interp(site, c, supply, itMW) })).filter(x => x.m);
-  const ok = r.filter(x => x.m.valid).sort((a, b) => a.m.pue_mean - b.m.pue_mean);
-  if (ok.length) {
-    const best = ok[0], dry = ok.find(x => x.c !== 'evaporative');
-    if (best.c === 'evaporative' && dry && dry.m.pue_mean - best.m.pue_mean < 0.01) return { c: dry.c, why: t('reco.dry', { d: fmt((dry.m.pue_mean - best.m.pue_mean) * 1000, 1), w: fmt(best.m.water_m3) }) };
-    return { c: best.c, why: t('reco.best') + (best.c === 'evaporative' ? t('reco.best.water', { w: fmt(best.m.water_m3) }) : '') };
-  }
-  const least = r.sort((a, b) => a.m.unmet_h - b.m.unmet_h)[0];
-  return { c: least.c, why: t('reco.none') };
+
+// 散熱自動決定（使用者 2026-10-26：0 小時是切點）：純乾冷卻器在 20 年逐時資料裡平均與最差一年都 0 小時排不掉熱 → 用它（省掉冰水機）；
+// 否則加輔助冰水機（各場址各規模都 0 小時）。供水固定 45 °C（DSX 規格）。GADU 固定冰水機。
+function autoCool(itMW) {
+  if (isGadu()) return { c: 'chilled_water', s: 't28', dry: null };
+  const dry = interp(state.site, 'dry_only', 't45', itMW);
+  const ok = !!dry && dry.unmet_h < 1e-6 && dry.unmet_h_max === 0;
+  return { c: ok ? 'dry_only' : 'dry_plus_chiller', s: 't45', dry };
 }
 
 // ---------------------------------------------------------------- UI：場址卡片
@@ -118,55 +119,62 @@ $('#mwInput').onchange = e => { state.mw = Math.min(1000, Math.max(0.5, +e.targe
 $('#slRange').oninput = e => { state.siteL = +e.target.value; sizeUI(); update(); };
 $('#swRange').oninput = e => { state.siteW = +e.target.value; sizeUI(); update(); };
 
-// ---------------------------------------------------------------- UI：散熱
-function segUI(id, key) { $$(`#${id} button`).forEach(b => { b.classList.toggle('on', b.dataset.v === state[key]); b.onclick = () => { state[key] = b.dataset.v; state.preset = null; segUI(id, key); update(); }; }); }
-
-// ---------------------------------------------------------------- 建議設定（一鍵最佳化）
-// 在「全年每小時都排得掉熱」的組合（3 散熱 × 2 供水）裡挑：最省電 = 設施耗電最少；最省水 = 用水最少，同水量再比耗電。
-// 沒有任何組合排得掉熱時，退而求其次挑排不掉熱小時最少的，並標示。
-function optimize(goal, itMW) {
-  const c = [];
-  for (const k of coolKeys()) for (const sp of supKeys()) { const m = interp(state.site, k, sp, itMW); if (m) c.push({ c: k, s: sp, m }); }
-  const ok = c.filter(x => x.m.valid);
-  if (!ok.length) { const b = c.sort((a, b) => a.m.unmet_h - b.m.unmet_h)[0]; return { ...b, feasible: false }; }
-  if (goal === 'water') return { ...ok.sort((a, b) => a.m.water_m3 - b.m.water_m3 || a.m.facility_mwh - b.m.facility_mwh)[0], feasible: true };
-  // 最省電：耗電最少；但和最少者差 0.5% 以內時，選用水較少的（不為了幾乎看不出的省電去耗大量水）
-  const minE = Math.min(...ok.map(x => x.m.facility_mwh));
-  const near = ok.filter(x => x.m.facility_mwh <= minE * 1.005).sort((a, b) => a.m.water_m3 - b.m.water_m3 || a.m.facility_mwh - b.m.facility_mwh);
-  return { ...near[0], feasible: true };
-}
-function presetUI(itMW) {
-  const lab = o => t('preset.lab', { cool: t(COOL[o.c]), sup: supLabel(o.s), gwh: fmt(o.m.facility_mwh / 1000, 1), water: fmt(o.m.water_m3) }) + (o.feasible ? '' : t('preset.gap'));
-  const best = { energy: optimize('energy', itMW), water: optimize('water', itMW) };
-  $('#pEnergy').innerHTML = lab(best.energy); $('#pWater').innerHTML = lab(best.water);
-  $$('#presetSeg button').forEach(b => { b.classList.toggle('on', b.dataset.p === state.preset); b.onclick = () => { state.preset = b.dataset.p; update(); }; });
-  return best;
-}
-
 // ---------------------------------------------------------------- 結果
-function kpiStrip(m) {
-  const sk = SK(), ef = layout.n_pods * sk.pf_inf_total / 1000;
-  const gwh = m.facility_mwh / 1000;
-  $('#dataTagKpi').textContent = `PUE ${fmt(m.pue_mean, 3)}${m.valid ? '' : ' ⚠'}`;
-  $('#kpiStrip').innerHTML = [
-    [fmt(m.pue_mean, 3), m.valid ? t('strip.pue.ok') : t('strip.pue.bad'), m.valid ? 'good' : 'bad'],
-    [gwh >= 1000 ? `${fmt(gwh / 1000, 2)} TWh` : `${fmt(gwh, gwh < 100 ? 1 : 0)} GWh`, t('strip.energy'), ''],
-    [`${fmt(m.water_m3)} m³`, t('strip.water'), ''],
-    [`${fmt(ef, ef < 100 ? 1 : 0)} EF`, t('strip.compute'), ''],
-  ].map(([v, l, c]) => `<div class="${c}"><b>${v}</b><span>${l}</span></div>`).join('');
+
+// 常駐儀表板：總算力 + 電力 / 用水 / 土地 / 造價（總量與每 EF）。數字變動時旁邊顯示 ▲▼ 百分比：
+// 和「上一次停下來的狀態」比（拖動中持續顯示，停 2.5 秒後淡出並把現狀當新基準）。
+let dashBase = null, dashTimer = null;
+const fmtMW = mw => mw >= 1000 ? `${fmt(mw / 1000, 2)}<small>GW</small>` : `${fmt(mw, mw < 100 ? 1 : 0)}<small>MW</small>`;
+const fmtN = v => fmt(v, v > 0 && v < 10 ? 1 : 0);
+function dashboard(m) {
+  const sk = SK(), ef = layout.n_pods * sk.pf_inf_total / 1000, gpus = layout.n_pods * sk.gpus;
+  const v = { ef, mw: layout.it_mw * m.pue_mean, water: m.water_m3, ha: layout.area_ha };
+  v.kw_ef = v.mw * 1000 / ef; v.w_ef = v.water / ef; v.m2_ef = v.ha * 1e4 / ef;
+  if (!dashBase) dashBase = v;
+  const dl = (k, lowerIsGood) => {
+    const a = dashBase[k], b = v[k];
+    if (a === b || (!a && !b)) return '';
+    const pct = a ? (b - a) / a * 100 : Infinity; if (Math.abs(pct) < 0.5) return '';
+    const cls = lowerIsGood == null ? '' : ((b < a) === lowerIsGood ? ' good' : ' bad');
+    return `<i class="dl${cls}">${b > a ? '▲' : '▼'}${Number.isFinite(pct) ? fmt(Math.abs(pct), Math.abs(pct) < 10 ? 1 : 0) + '%' : ''}</i>`;
+  };
+  const rows = [
+    ['dash.power', 'dash.power.t', `${fmtMW(v.mw)}${dl('mw')}`, `${fmt(v.kw_ef)}<small>kW</small>${dl('kw_ef', true)}`],
+    ['dash.water', 'dash.water.t', `${fmt(v.water)}<small>m³</small>${dl('water')}`, `${fmtN(v.w_ef)}<small>m³</small>${dl('w_ef', true)}`],
+    ['dash.land', 'dash.land.t', `${fmt(v.ha, v.ha < 100 ? 2 : 0)}<small>ha</small>${dl('ha')}`, `${fmtN(v.m2_ef)}<small>m²</small>${dl('m2_ef', true)}`],
+    ['dash.cost', 'dash.cost.soon', '—', '—'],
+  ];
+  $('#dash').innerHTML = `<div class="dash-top"><b>${fmt(ef, ef < 100 ? 1 : 0)}<small>EF</small>${dl('ef')}</b><span>${isGadu() ? t('kpi.compute.g', { gpus: fmt(gpus), model: sk.name }) : t('kpi.compute', { gpus: fmt(gpus) })}</span></div>` +
+    `<table class="dash-t"><thead><tr><th></th><th>${t('dash.total')}</th><th>${t('dash.perEF')}</th></tr></thead><tbody>` +
+    rows.map(([k, tt, a, b]) => `<tr title="${t(tt)}"><th>${t(k)}</th><td>${a}</td><td class="pe">${b}</td></tr>`).join('') + '</tbody></table>';
+  const req = layout.requested || {}, given = req.site_l ? req.site_l * req.site_w / 1e4 : null;   // 基地模式：陣列用掉的面積 vs 使用者給的基地
+  $('#dashStatus').innerHTML = t('dash.status', { pue: fmt(m.pue_mean, 3), cool: t(COOL[state.cooling]), sup: supLabel(state.supply) }) +
+    (given ? `<br>${t('dash.landuse', { used: fmt(v.ha, 2), given: fmt(given, 2) })}` : '') + (m.valid ? '' : `<span class="warn">${t('dash.gap', { h: fmt(m.unmet_h) })}</span>`);
+  // 手機上方一行：五個總量，長數字用簡寫（1.2K、3.4萬）避免截斷
+  const cpt = x => x >= 10000 ? new Intl.NumberFormat(locale(), { notation: 'compact', maximumFractionDigits: 1 }).format(x) : fmt(x, x < 100 && x % 1 ? 1 : 0);
+  $('#kpiStrip').innerHTML = [[`${cpt(ef)} EF`, t('strip.compute')], [v.mw >= 1000 ? `${fmt(v.mw / 1000, 2)} GW` : `${fmt(v.mw, v.mw < 100 ? 1 : 0)} MW`, t('strip.power')], [`${cpt(v.water)} m³`, t('strip.water')],
+    [`${fmt(v.ha, v.ha < 10 ? 2 : v.ha < 100 ? 1 : 0)} ha`, t('strip.land')], ['—', t('strip.cost')]].map(([a, l]) => `<div><b>${a}</b><span>${l}</span></div>`).join('');
+  $('#dataTagKpi').textContent = `${fmt(ef, ef < 100 ? 1 : 0)} EF`;
+  clearTimeout(dashTimer); dashTimer = setTimeout(() => { dashBase = v; $$('#dash .dl').forEach(e => e.classList.add('fade')); }, 2500);
+}
+
+function coolBox(m, auto) {
+  if (isGadu()) { $('#coolAuto').innerHTML = t('gadu.cool.note'); return; }
+  const d = auto.dry, lt1 = h => h > 0 && h < 1 ? '<1' : fmt(h);
+  $('#coolAuto').innerHTML = (state.cooling === 'dry_only' ? t('auto.dry') : t('auto.chiller', { h: d ? lt1(d.unmet_h) : '–', hmax: d ? fmt(d.unmet_h_max) : '–', mwh: fmt(m.chiller_mwh) })) + `<small>${t('auto.rule')}</small>`;
 }
 
 function kpis(m) {
-  kpiStrip(m);
+  dashboard(m);
   const sk = SK(), racks = layout.n_pods * sk.racks_total, gpus = layout.n_pods * sk.gpus, pfI = layout.n_pods * sk.pf_inf_total, pfT = sk.pf_inf_per_gpu === 50 ? Math.round(pfI * RUBIN.pf_train / RUBIN.pf_inf) : null;
   const h = fmt(m.unmet_h), hmax = fmt(m.unmet_h_max);
   const badge = `<span class="badge ${m.valid ? 'good' : 'bad'}" title="${m.valid ? t('kpi.ok.t') : t('kpi.gap.t', { h, hmax })}">${m.valid ? t('kpi.ok') : t('kpi.gap', { h })}</span>`;
   $('#kpis').innerHTML = [
+    [`${fmt(m.pue_mean, 3)}${badge}`, t('kpi.pue'), (m.valid ? 'ok' : 'bad') + ' wide', ''],
     [`${fmt(pfI)}<small> PFLOPS</small>`, isGadu() ? t('kpi.compute.g', { gpus: fmt(gpus), model: sk.name }) : t('kpi.compute', { gpus: fmt(gpus) }), 'ok wide', pfT ? t('kpi.compute.t', { pfT: fmt(pfT) }) : ''],
-    [`${fmt(m.pue_mean, 3)}${badge}`, t('kpi.pue'), m.valid ? 'ok' : 'bad', ''],
     [`${fmt(m.facility_mwh / 1000, 1)}<small> GWh</small>`, t('kpi.energy'), 'ok', ''],
-    [`${fmt(m.water_m3)}<small> m³</small>`, t('kpi.water'), 'ok', ''],
-    [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, t('kpi.rise'), 'ok', t('kpi.rise.t', { r: fmt(m.recirc_k, 1), i: fmt(m.island_k, 1) })],
+    [`${fmt(layout.it_mw, 1)}<small> MW</small>`, t('kpi.it'), 'ok', ''],
+    [`+${fmt(m.recirc_k + m.island_k, 1)}<small> K</small>`, t('kpi.rise'), 'ok wide', t('kpi.rise.t', { r: fmt(m.recirc_k, 1), i: fmt(m.island_k, 1) })],
   ].map(([v, l, c, tt]) => `<div class="kpi ${c}" title="${tt}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
   const notes = [t(isGadu() ? 'note.layout.gadu' : 'note.layout', { pods: fmt(layout.n_pods), model: sk.name, racks: fmt(racks), mw: fmt(layout.it_mw, 1), l: fmt(layout.site_m[0]), w: fmt(layout.site_m[1]), ha: fmt(layout.area_ha, 2),
     blocks: layout.n_blocks > 1 ? t('note.blocks', { n: layout.n_blocks }) : '' })];
@@ -196,9 +204,9 @@ function mixChart(m) {
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => t('mix.tip', { v: fmt(c.parsed.x) }) } } } }) });
 }
 
-function cmpTable(all, reco) {
+function cmpTable(all) {
   $('#cmpTable').innerHTML = `<table><thead><tr><th>${t('cmp.strategy')}</th><th>PUE</th><th>${t('cmp.unmet')}</th><th>${t('cmp.chiller')}</th><th>${t('cmp.water')}</th></tr></thead><tbody>` +
-    coolKeys().filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === reco.c ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table><p class="hint">' + t('cmp.reco') + reco.why + '</p>';
+    coolKeys().filter(c => all[c]).map(c => { const m = all[c]; return `<tr class="${c === state.cooling ? 'sel' : ''}"><td>${t(COOL[c])}${c === state.cooling ? ' ★' : ''}</td><td>${fmt(m.pue_mean, 3)}</td><td>${m.valid ? '0' : '⚠ ' + fmt(m.unmet_h)}</td><td>${fmt(m.chiller_mwh)}</td><td>${fmt(m.water_m3)}</td></tr>`; }).join('') + '</tbody></table>';
 }
 
 function climCharts() {
@@ -230,17 +238,16 @@ function productUI() {
   sel.innerHTML = Object.entries(PR().skus).map(([k, s]) => `<option value="${k}"${k === skuKey() ? ' selected' : ''}>${s.name} · ${s.it_mw} MW</option>`).join('');
   sel.onchange = () => setProduct(state.product, sel.value);
   document.body.classList.toggle('gadu', g);
+  if (g && $('#data .tab[data-tab="cmp"]').classList.contains('active')) $('#data .tab[data-tab="sum"]').click();   // GADU 只有一種散熱，比較分頁隱藏
   swapI18n('[data-pane="unit"] > p.hint', g ? 'unit.hint.gadu' : 'unit.hint'); swapI18n('[data-pane="unit"] > p.hint:last-of-type', g ? 'unit.official.gadu' : 'unit.official');
   swapI18n('#unitSeg [data-view="unit"] small', g ? 'unit.inside.s.gadu' : 'unit.inside.s');
   swapI18n('#unitSeg [data-view="cool"] span', g ? 'unit.cool.gadu' : 'unit.cool'); swapI18n('#unitSeg [data-view="cool"] small', g ? 'unit.cool.gadu.s' : 'unit.cool.s');
   swapI18n('#unitSeg [data-view="skid"] span', g ? 'unit.skidview.gadu' : 'unit.skidview'); swapI18n('#unitSeg [data-view="skid"] small', g ? 'unit.skidview.gadu.s' : 'unit.skidview.s');
 }
 async function setProduct(p, sku) {
-  state.product = p; state.sku = sku; state.preset = null;
-  if (!coolKeys().includes(state.cooling)) state.cooling = coolKeys()[0];
-  if (!supKeys().includes(state.supply)) state.supply = supKeys()[0];
+  state.product = p; state.sku = sku;
   await ensureGrid(p);
-  productUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); unitFacts(); update();
+  productUI(); unitFacts(); update();
 }
 
 // ---------------------------------------------------------------- 單元（一個 POD 的組成）
@@ -272,24 +279,31 @@ function update() {
   $('#sizeFacts').innerHTML = [[t(isGadu() ? 'size.units' : 'size.pods'), t('size.pods.v', { n: fmt(layout.n_pods), racks: fmt(layout.n_pods * SK().racks_total) })], [t('size.it'), `${fmt(layout.it_mw, 1)} MW`], [t('size.base'), `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
     [t('size.area'), `${fmt(layout.area_ha, 2)} ha`], [t('size.blocks'), layout.n_blocks > 1 ? t('size.blocks.v', { n: layout.n_blocks }) : t('size.single')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   $('#sizeWarn').textContent = layout.warnings.map(warnText).join(lang === 'en' ? '; ' : '；');
-  const best = presetUI(layout.it_mw);
-  if (state.preset && best[state.preset]) { state.cooling = best[state.preset].c; state.supply = best[state.preset].s; segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); store.set('state', state); }
+  const auto = autoCool(layout.it_mw); state.cooling = auto.c; state.supply = auto.s; store.set('state', state);
   const all = {}; for (const c of coolKeys()) all[c] = interp(state.site, c, state.supply, layout.it_mw);
-  const m = all[state.cooling]; if (!m) { $('#sumNotes').innerHTML = `<p class="warn">${t('grid.missing')}</p>`; $('#kpis').innerHTML = ''; $('#kpiStrip').innerHTML = ''; return; }
-  const reco = recommend(state.site, state.supply, layout.it_mw);
+  const m = all[state.cooling]; if (!m) { $('#sumNotes').innerHTML = `<p class="warn">${t('grid.missing')}</p>`; $('#kpis').innerHTML = ''; $('#kpiStrip').innerHTML = ''; $('#dash').innerHTML = ''; return; }
+  coolBox(m, auto);
   const site = CLIM[state.site];
   $('#summaryChip').textContent = `${PR().short}${isGadu() ? ' ' + SK().name : ''}・${siteName(state.site, site)} (${site.koppen})・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${t(COOL[state.cooling])}・${supLabel(state.supply)}・PUE ${fmt(m.pue_mean, 3)}`;
-  kpis(m); yearChart(all); mixChart(m); cmpTable(all, reco); climCharts();
+  kpis(m); yearChart(all); mixChart(m); cmpTable(all); climCharts();
 }
 
 // ---------------------------------------------------------------- 分頁、收合、顯示、提示、匯出
 function tabs(root) { $$(`${root} .tab`).forEach(t => t.onclick = () => { $$(`${root} .tab`).forEach(x => x.classList.toggle('active', x === t)); $$(`${root} .tabpane`).forEach(p => p.classList.toggle('active', p.dataset.pane === t.dataset.tab)); Object.values(charts).forEach(c => c.resize()); }); }
 $('#menuBtn').onclick = () => { document.body.classList.toggle('menu-open'); document.body.classList.remove('sheet-open'); };
-// 底部面板：點把手 / 摘要條切換，或上下滑
+// 手機下方設定面板：點分頁展開（並切到該分頁）、再點已選的分頁收起；分頁列上下滑也可。兩個面板一次只開一個。
+const navToggle = (open) => { document.body.classList.toggle('menu-open', open); if (open) document.body.classList.remove('sheet-open'); };
+$('#nav .tabs').addEventListener('click', e => {
+  const tb = e.target.closest('.tab'); if (!tb || !document.body.classList.contains('mobile')) return;
+  navToggle(!(tb.classList.contains('active') && document.body.classList.contains('menu-open')));
+}, true);
+{ let y0 = null; $('#nav .tabs').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
+  $('#nav .tabs').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); navToggle(dy < 0); } }); }
+// 手機上方儀表板：點一行切換展開，或上下滑（往下拉展開）
 const sheetToggle = (open) => { document.body.classList.toggle('sheet-open', open ?? !document.body.classList.contains('sheet-open')); if (document.body.classList.contains('sheet-open')) document.body.classList.remove('menu-open'); setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300); };
 $('#sheetHead').onclick = () => sheetToggle();
 { let y0 = null; $('#sheetHead').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
-  $('#sheetHead').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy < 0); } }); }
+  $('#sheetHead').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy > 0); } }); }
 // 面板縮小 / 展開（桌機、平板）：各自縮成小標籤，左下按鈕一次收起或展開兩側；記住使用者的選擇。不使用瀏覽器全螢幕（平板上會干擾互動）。
 function setMin(which, on) {
   document.body.classList.toggle(which + '-min', on);
@@ -304,6 +318,10 @@ $('#navTag').onclick = () => setMin('nav', false);
 $('#dataTag').onclick = () => setMin('data', false);
 const toggleBoth = () => { const both = document.body.classList.contains('nav-min') && document.body.classList.contains('data-min'); setMin('nav', !both); setMin('data', !both); };
 $('#fsBtn').onclick = toggleBoth;
+// 右側「細節」收合：儀表板常駐，摘要 / 能耗 / 比較 / 氣候收在下面（桌機記住；手機底部面板本身就是細節）
+const setMore = on => { document.body.classList.toggle('more-open', on); $('#moreBtn').setAttribute('aria-expanded', on); store.set('more', on); if (on) setTimeout(() => Object.values(charts).forEach(c => c.resize()), 50); };
+$('#moreBtn').onclick = () => setMore(!document.body.classList.contains('more-open'));
+setMore(Q.get('tab') ? true : store.get('more', false));
 addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) toggleBoth(); });
 { const m = Q.get('view') === 'full' ? { nav: true, data: true } : store.get('min', { nav: false, data: false }); setMin('nav', !!m.nav); setMin('data', !!m.data); }
 
@@ -384,7 +402,6 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   progress('libs', 1);
   [CLIM, GRID] = await Promise.all([fetchJSON('data/climate_summary.json', 'climate'), fetchJSON('data/results_grid.json', 'grid')]);
   GRIDS.dsx_pod = GRID; if (isGadu()) await ensureGrid('gadu');
-  if (!coolKeys().includes(state.cooling)) state.cooling = coolKeys()[0]; if (!supKeys().includes(state.supply)) state.supply = supKeys()[0];
   scene = new PodScene($('#scene'), { quality: QUALITY.q, autoDowngrade: QUALITY.auto, labels: { site: (l, w, ha) => t('scene.site', { l, w, ha }), use: (l, w) => t('scene.use', { l, w }) } });
   await scene.load('assets/', (f, loaded, total) => progress(f, loaded / Math.max(total || EST[f], loaded * 1.05)));
   progress('container.glb', 1); progress('cooler_module.glb', 1); progress('power_skid.glb', 1); progress('chiller.glb', 1); progress('build', 0.15); await paint();
@@ -399,8 +416,8 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   // 語言切換：靜態文字重套，動態文字全部重畫（場址卡片、單元、結果、匯出說明、3D 基地標籤）
   const langUI = () => $$('#langSeg button').forEach(b => { b.classList.toggle('on', b.dataset.lang === lang); b.onclick = () => { if (!setLang(b.dataset.lang)) return; langUI(); siteCards(); productUI(); unitFacts(); setMin('nav', document.body.classList.contains('nav-min')); update(); exportUI(); scene.setLayout(layout); }; });
   langUI();
-  tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); segUI('coolSeg', 'cooling'); segUI('supplySeg', 'supply'); productUI();
-  // 分鏡：每個設定分頁一個鏡頭（場址 = 全景、規模 = 整個基地、散熱 = 散熱模組近景、單元 = 貨櫃剖面）
+  tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); productUI();
+  // 分鏡：每個設定分頁一個鏡頭（氣候 = 全景、單元 = 貨櫃剖面、規模 = 整個基地）
   $$('#nav .tab').forEach(t => t.addEventListener('click', () => { scene.setView(t.dataset.tab); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === 'unit')); }));
   $$('#unitSeg button').forEach(b => b.onclick = () => { $$('#unitSeg button').forEach(x => x.classList.toggle('on', x === b)); scene.setView(b.dataset.view); });
   unitFacts();
@@ -413,7 +430,7 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   if (Q.get('dist')) { const d = +Q.get('dist'), t = scene.controls.target, c = scene.camera.position; const v = c.clone().sub(t).setLength(d); c.copy(t.clone().add(v)); }
   scene.setVisible({ shell: true, cooler: true, rack: false });
   if (Q.get('panel') === 'menu') document.body.classList.add('menu-open'); if (Q.get('panel') === 'sheet') document.body.classList.add('sheet-open');   // 測試 / 分享用
-  scene.start();
+  syncFocus(); scene.start();
   progress('build', 1); await paint();
   $('#loading').classList.add('done'); checkApi();
 })().catch(e => {                                            // 載入失敗：進度條轉紅並顯示原因

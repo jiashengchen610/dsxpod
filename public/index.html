@@ -26,28 +26,39 @@
   <div class="brand-sub" id="summaryChip">—</div>
 </header>
 
-<!-- 左：設定（四個分頁，每個分頁一個鏡頭） -->
+<!-- 左：設定（氣候 → 單元 → 規模；每個分頁一個鏡頭）。散熱不是旋鈕：DSX 依 20 年逐時結果自動決定，GADU 固定 -->
 <nav class="nav panel" id="nav" aria-label="設定" data-i18n-aria="nav.aria">
   <div class="tabs" role="tablist">
-    <button class="tab active" data-tab="site" role="tab" data-i18n="nav.site">① 場址</button>
-    <button class="tab" data-tab="size" role="tab" data-i18n="nav.size">② 規模</button>
-    <button class="tab" data-tab="cool" role="tab" data-i18n="nav.cool">③ 散熱</button>
-    <button class="tab" data-tab="unit" role="tab" data-i18n="nav.unit">④ 單元</button>
+    <button class="tab active" data-tab="site" role="tab" data-i18n="nav.site">① 氣候</button>
+    <button class="tab" data-tab="unit" role="tab" data-i18n="nav.unit">② 單元</button>
+    <button class="tab" data-tab="size" role="tab" data-i18n="nav.size">③ 規模</button>
     <button class="collapse" id="navCollapse" title="縮小設定面板" aria-label="縮小設定面板" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse">‹</button>
-  </div>
-  <!-- 產品：整個場址切換（NVIDIA DSX POD / GIGABYTE GADU）；GADU 再選機櫃型號（SKU） -->
-  <div class="product-bar">
-    <span class="lbl" data-i18n="product.label">產品</span>
-    <div class="seg mini" id="productSeg"><button data-p="dsx_pod" class="on">NVIDIA DSX POD</button><button data-p="gadu">GIGABYTE GADU</button></div>
-    <select id="skuSel" class="sku" hidden aria-label="GADU SKU"></select>
   </div>
   <section class="tabpane active" data-pane="site">
     <p class="hint" data-i18n="site.hint">選一個氣候帶。卡片顯示逐月日最高 / 日最低氣溫帶與柯本分類。</p>
     <div class="sites" id="siteCards"></div>
   </section>
+  <section class="tabpane" data-pane="unit">
+    <!-- 產品：整個場址切換（NVIDIA DSX POD / GIGABYTE GADU）；GADU 再選機櫃型號（SKU） -->
+    <div class="product-bar">
+      <span class="lbl" data-i18n="product.label">產品</span>
+      <div class="seg mini" id="productSeg"><button data-p="dsx_pod" class="on">NVIDIA DSX POD</button><button data-p="gadu">GIGABYTE GADU</button></div>
+      <select id="skuSel" class="sku" hidden aria-label="GADU SKU"></select>
+    </div>
+    <label class="field" data-i18n="unit.coolLabel">散熱（依氣候與規模自動決定）</label>
+    <div class="reco" id="coolAuto"></div>
+    <p class="hint" data-i18n="unit.hint">一個 DSX POD 貨櫃：南牆打開看內部（依 NVIDIA 官方剖面圖排列）。點機櫃、CDU、滅火系統、供回水主管看說明。</p>
+    <div class="seg col" id="unitSeg">
+      <button data-view="unit" class="on"><span data-i18n="unit.inside">貨櫃內部（剖面）</span><small data-i18n="unit.inside.s">配電盤＋滅火鋼瓶｜3 櫃＋列間 CDU＋4 櫃</small></button>
+      <button data-view="cool"><span data-i18n="unit.cool">疊放散熱模組</span><small data-i18n="unit.cool.s">容量以 Vertiv MCV430 計（N+1）</small></button>
+      <button data-view="skid"><span data-i18n="unit.skidview">800 VDC 電力中心</span><small data-i18n="unit.skidview.s">中壓交流 → 800 V 直流，地面線槽接貨櫃</small></button>
+    </div>
+    <dl class="facts" id="unitFacts"></dl>
+    <p class="hint" data-i18n="unit.official">官方數字：28,500 kg、約 1,000 萬個零件、25 exaFLOPS、17 km 網路線。貨櫃內排列依官方剖面圖；機櫃規格以 GB300 代理 Vera Rubin NVL72。</p>
+  </section>
   <section class="tabpane" data-pane="size">
     <div class="seg" id="sizeMode">
-      <button class="on" data-mode="mw" data-i18n="size.mw">總電量</button><button data-mode="site" data-i18n="size.site">基地範圍</button>
+      <button class="on" data-mode="site" data-i18n="size.site">基地範圍</button><button data-mode="mw" data-i18n="size.mw">總電量</button>
     </div>
     <div id="sizeMW">
       <label class="field"><span data-i18n="size.itmw">IT 銘牌容量</span> <output id="mwOut">10 MW</output></label>
@@ -64,57 +75,35 @@
     <dl class="facts" id="sizeFacts"></dl>
     <div class="warn" id="sizeWarn"></div>
   </section>
-  <section class="tabpane" data-pane="cool">
-    <div class="reco gadu-only" id="gaduCoolNote" data-i18n="gadu.cool.note">GADU 的散熱是固定配置：列間 CDU／列間冷卻器＋氣冷冰水機，冰水溫度由機櫃型號決定（液冷 25 °C、氣冷 15 °C）。</div>
-    <label class="field" data-i18n="cool.preset">建議設定</label>
-    <div class="seg col preset" id="presetSeg">
-      <button data-p="energy"><span data-i18n="cool.energy">⚡ 最省電</span><small id="pEnergy">—</small></button>
-      <button data-p="water"><span data-i18n="cool.water">💧 最省水</span><small id="pWater">—</small></button>
-    </div>
-    <p class="hint" data-i18n="cool.preset.hint">只從全年每小時都排得掉熱的組合裡挑；改場址或規模會自動重算，手動改下面的選項即為自訂。</p>
-    <label class="field" data-i18n="cool.strategy">散熱策略</label>
-    <div class="seg col" id="coolSeg">
-      <button data-v="dry_only" class="on"><span data-i18n="cool.dry">純乾冷卻器</span><small data-i18n="cool.dry.s">零用水；熱天可能排不掉</small></button>
-      <button data-v="dry_plus_chiller"><span data-i18n="cool.chiller">乾冷卻器＋輔助冰水機</span><small data-i18n="cool.chiller.s">補足熱天；多耗電</small></button>
-      <button data-v="evaporative"><span data-i18n="cool.evap">蒸發式（絕熱）</span><small data-i18n="cool.evap.s">熱天噴水；耗水</small></button>
-    </div>
-    <label class="field" data-i18n="cool.supply">供水溫度</label>
-    <div class="seg" id="supplySeg">
-      <button data-v="t45" class="on" data-i18n="cool.t45">45 °C（DSX）</button><button data-v="t32" data-i18n="cool.t32">32 °C（W32）</button>
-    </div>
-  </section>
-  <section class="tabpane" data-pane="unit">
-    <p class="hint" data-i18n="unit.hint">一個 DSX POD 貨櫃：南牆打開看內部（依 NVIDIA 官方剖面圖排列）。點機櫃、CDU、滅火系統、供回水主管看說明。</p>
-    <div class="seg col" id="unitSeg">
-      <button data-view="unit" class="on"><span data-i18n="unit.inside">貨櫃內部（剖面）</span><small data-i18n="unit.inside.s">配電盤＋滅火鋼瓶｜3 櫃＋列間 CDU＋4 櫃</small></button>
-      <button data-view="cool"><span data-i18n="unit.cool">疊放散熱模組</span><small data-i18n="unit.cool.s">容量以 Vertiv MCV430 計（N+1）</small></button>
-      <button data-view="skid"><span data-i18n="unit.skidview">800 VDC 電力中心</span><small data-i18n="unit.skidview.s">中壓交流 → 800 V 直流，地面線槽接貨櫃</small></button>
-    </div>
-    <dl class="facts" id="unitFacts"></dl>
-    <p class="hint" data-i18n="unit.official">官方數字：28,500 kg、約 1,000 萬個零件、25 exaFLOPS、17 km 網路線。貨櫃內排列依官方剖面圖；機櫃規格以 GB300 代理 Vera Rubin NVL72。</p>
-  </section>
 </nav>
 
-<!-- 右：報告（摘要 / 能耗 / 比較 / 氣候） -->
+<!-- 右：常駐儀表板（總算力 + 電力 / 用水 / 土地 / 造價的總量與每 EF）＋ 細節（摘要 / 能耗 / 比較 / 氣候）收合 -->
 <aside class="data panel" id="data" aria-label="結果" data-i18n-aria="data.aria">
   <div class="sheet-head" id="sheetHead" role="button" aria-label="展開報告" data-i18n-aria="sheet.open">
     <div class="grab"></div>
     <div class="kstrip" id="kpiStrip"></div>
   </div>
+  <div class="dash-head"><span data-i18n="dash.title">儀表板</span>
+    <button class="collapse" id="dataCollapse" title="縮小報告面板" aria-label="縮小報告面板" data-i18n-title="data.collapse" data-i18n-aria="data.collapse">›</button>
+  </div>
+  <div class="dash" id="dash"></div>
+  <div class="dash-status" id="dashStatus"></div>
+  <button class="more-btn" id="moreBtn" aria-expanded="false" aria-controls="more"><span data-i18n="dash.more">細節</span></button>
+  <div class="more" id="more">
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="sum" data-i18n="tab.sum">摘要</button>
     <button class="tab" data-tab="energy" data-i18n="tab.energy">能耗</button>
     <button class="tab" data-tab="cmp" data-i18n="tab.cmp">比較</button>
     <button class="tab" data-tab="clim" data-i18n="tab.clim">氣候</button>
-    <button class="collapse" id="dataCollapse" title="縮小報告面板" aria-label="縮小報告面板" data-i18n-title="data.collapse" data-i18n-aria="data.collapse">›</button>
   </div>
   <section class="tabpane active" data-pane="sum"><div class="kpis" id="kpis"></div><div class="notes" id="sumNotes"></div></section>
   <section class="tabpane" data-pane="energy">
     <div class="chart mid"><canvas id="yearChart"></canvas></div><p class="hint" data-i18n="energy.year.hint">每年 PUE（2005–2024）。年際差遠小於場址與散熱策略的差。</p>
     <div class="chart mid"><canvas id="mixChart"></canvas></div><p class="hint" data-i18n="energy.mix.hint">一年的設施耗電組成（不含 IT）。</p>
   </section>
-  <section class="tabpane" data-pane="cmp"><div id="cmpTable"></div><p class="hint" data-i18n="cmp.hint">同場址、同規模、同供水溫度下的三種散熱策略。⚠ 表示每年有排不掉熱的小時，PUE 不可直接採信。</p></section>
+  <section class="tabpane" data-pane="cmp"><div id="cmpTable"></div><p class="hint" data-i18n="cmp.hint">純乾冷卻器與加輔助冰水機的比較（同場址、同規模、45 °C 供水）。系統選 20 年內 0 小時排不掉熱、且設備最少的方案（★）。</p></section>
   <section class="tabpane" data-pane="clim"><div class="chart short"><canvas id="climT"></canvas></div><div class="chart short"><canvas id="climP"></canvas></div><div id="climFacts" class="facts-grid"></div></section>
+  </div>
   <footer class="export">
     <button id="exportBtn" class="primary" data-i18n="export.btn" data-i18n-title="export.t">匯出 USD 與參數（zip）</button>
     <div class="hint" id="exportHint"></div>
