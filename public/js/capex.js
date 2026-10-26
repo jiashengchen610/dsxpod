@@ -13,7 +13,6 @@ export const C = {
  "cdu": 300000.0,
  "inrow_cooler": 30000.0,
  "dry_cooler_per_kw": 90.0,
- "dry_module_kw": 430.0,
  "dry_modules_per_pod": 3.0,
  "chiller_per_kw": 250.0,
  "chiller_margin": 1.2,
@@ -34,7 +33,8 @@ export const C = {
  "asphalt_t_m3": 2.4,
  "asphalt_t": 100.0,
  "fence_m": 18.0,
- "building": 300000.0
+ "building": 300000.0,
+ "depreciation_years": 5.0
 };
 export const COEF_META = {
  "rack_vr_nvl72": {
@@ -103,15 +103,9 @@ export const COEF_META = {
   "source": "relative benchmarks only (2.6x open tower)",
   "confidence": "low"
  },
- "dry_module_kw": {
-  "unit": "kW",
-  "label": "heat rejection per cooler module (Vertiv MCV430)",
-  "source": "Vertiv model rating",
-  "confidence": "medium"
- },
  "dry_modules_per_pod": {
   "unit": "count",
-  "label": "cooler modules per DSX POD (N+1)",
+  "label": "stacked cooler sections per DSX POD (2 duty + 1 standby), each rated POD liquid heat / 2",
   "source": "layout",
   "confidence": "high"
  },
@@ -234,6 +228,45 @@ export const COEF_META = {
   "label": "control / substation building",
   "source": "estimate",
   "confidence": "low"
+ },
+ "depreciation_years": {
+  "unit": "years",
+  "label": "straight-line depreciation for annualised capex (TCO per year)",
+  "source": "typical AI hardware life",
+  "confidence": "medium"
+ }
+};
+// 場址電價（weather.SITES；USD 在 /World/Site aif:site:electricityUsdPerKwh）
+export const ELEC = {
+ "taoyuan": {
+  "usd_kwh": 0.135,
+  "source": "Taipower industrial tariff NT$4.27/kWh (frozen 2026)",
+  "confidence": "medium"
+ },
+ "johor": {
+  "usd_kwh": 0.105,
+  "source": "~USD 105/MWh tracker; TNB E1 industrial from 33.7 sen/kWh",
+  "confidence": "medium"
+ },
+ "phoenix": {
+  "usd_kwh": 0.073,
+  "source": "EIA Arizona industrial average, 2026 YTD",
+  "confidence": "high"
+ },
+ "dallas": {
+  "usd_kwh": 0.067,
+  "source": "EIA Texas industrial average, 2026 YTD",
+  "confidence": "high"
+ },
+ "dublin": {
+  "usd_kwh": 0.21,
+  "source": "Eurostat H2-2025 largest non-household band EUR 0.191/kWh",
+  "confidence": "medium"
+ },
+ "oslo": {
+  "usd_kwh": 0.126,
+  "source": "European industrial price tables (hydro-dominated grid)",
+  "confidence": "medium"
  }
 };
 
@@ -253,7 +286,7 @@ export function capex(layout, product, sku, cooling, riseK = 0, tMaxC = 35, c = 
   const it = { compute: n * itUnitPrice(product, sku, c) }; it.network = it.compute * c.network_frac;
   const f = { container: n * c.container, cdu: n * sk.cdus * c.cdu, inrow: n * sk.inrow_coolers * c.inrow_cooler };
   if (product === 'dsx_pod') {
-    f.dry_cooler = n * c.dry_modules_per_pod * c.dry_module_kw * c.dry_cooler_per_kw;
+    f.dry_cooler = n * c.dry_modules_per_pod * sk.it_mw * 1000 * LIQ / (c.dry_modules_per_pod - 1) * c.dry_cooler_per_kw;
     let chillerKW = 0;
     if (cooling === 'dry_plus_chiller') {
       const reachable = tMaxC + riseK + c.trim_approach_k;
@@ -275,4 +308,8 @@ export function capex(layout, product, sku, cooling, riseK = 0, tMaxC = 35, c = 
   const items = { ...it, ...f }, sum = o => Object.values(o).reduce((a, b) => a + b, 0);
   const tIt = sum(it), tF = sum(f);
   return { items, it: tIt, facility: tF, total: tIt + tF };
+}
+export function opex(itMWh, facilityMWh, usdPerKWh, capexTotal, c = C) {
+  const energy = (itMWh + facilityMWh) * 1000 * usdPerKWh;
+  return { energy_usd_per_year: energy, tco_usd_per_year: capexTotal / c.depreciation_years + energy };
 }

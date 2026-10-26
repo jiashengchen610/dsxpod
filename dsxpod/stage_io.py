@@ -9,7 +9,7 @@
 """
 import re
 from pxr import Usd, UsdGeom, Sdf, Gf
-from .variants import Params, make_params, USD_CONTRACT, SUPPLY_TEMP
+from .variants import Params, make_params, USD_CONTRACT, SUPPLY_TEMP, RACK_KW_NAMEPLATE
 
 PLANT_PATH = "/World/Plant"            # 步驟 8：廠區 assembly（VariantSets、契約屬性），底下 POD_01..n 是貨櫃
 POD_PATH = PLANT_PATH                  # 舊名相容
@@ -99,16 +99,21 @@ def stage_to_params(stage, pod_path=POD_PATH) -> Params:
                 p.liquid_fraction_override = (liq / nl) / per
                 src.append(f"液冷份額 {p.liquid_fraction_override:.3f} ← aif:spec:liquidCooling / airCooling")
             fc = _attr(racks[0], "aif:spec:requiredLiquidFlowRate"); pq = _attr(racks[0], "aif:spec:liquidSidePqCurve")
+            ref = _attr(racks[0], "aif:spec:curveReferenceLiquidKw")
+            # 曲線是 GB300（液冷 116 kW）量的。其他機櫃：流量 = 每 kW 流量（第 2 欄）× 平均每櫃液冷熱（網路櫃為 0，總流量自然正確）；
+            # 壓降曲線依 s = 液冷熱 / 116 縮放（a/s²、b/s），每櫃在相同水力設計點運轉。
+            liq_avg = (liq / p.racks) if (nl and ref) else None
+            s_scale = (liq_avg / float(ref)) if liq_avg else 1.0
             if fc is not None and len(fc):
-                p.rack_flow_curve = sorted((float(v[0]), float(v[2])) for v in fc)
+                p.rack_flow_curve = sorted((float(v[0]), float(v[1]) * liq_avg if liq_avg else float(v[2])) for v in fc)
                 src.append(f"機櫃流量曲線 {len(fc)} 點（{p.rack_flow_curve[0][0]:g} °C {p.rack_flow_curve[0][1]:g} LPM → {p.rack_flow_curve[-1][0]:g} °C {p.rack_flow_curve[-1][1]:g} LPM）← aif:spec:requiredLiquidFlowRate")
             if pq:
                 m = re.search(r"([0-9.]+)\s*x2\s*\+\s*([0-9.]+)\s*x", str(pq))
                 if m:
-                    p.rack_pq_kpa_coeffs = (float(m.group(1)), float(m.group(2)))
-                    src.append(f"機櫃壓降 Δp = {m.group(1)}·LPM² + {m.group(2)}·LPM kPa ← aif:spec:liquidSidePqCurve")
+                    p.rack_pq_kpa_coeffs = (float(m.group(1)) / s_scale ** 2, float(m.group(2)) / s_scale)
+                    src.append(f"機櫃壓降 Δp = {p.rack_pq_kpa_coeffs[0]:.5f}·LPM² + {p.rack_pq_kpa_coeffs[1]:.4f}·LPM kPa ← aif:spec:liquidSidePqCurve（縮放 s = {s_scale:.3f} ← curveReferenceLiquidKw）")
         else:
-            src.append("機櫃功率 ← 後備 136 kW（機櫃沒有 aif:spec:maxPowerDcTdp）")
+            src.append(f"機櫃功率 ← 後備 {RACK_KW_NAMEPLATE:g} kW（機櫃沒有 aif:spec:maxPowerDcTdp）")
     else:
         src.append(f"racks ← 後備 {p.racks}（POD 底下沒有 Rack_* prim）")
 
@@ -207,6 +212,12 @@ def stage_to_params(stage, pod_path=POD_PATH) -> Params:
     site = stage.GetPrimAtPath(SITE_PATH)
     p.site_key = _attr(site, "aif:site:key", None); p.site_lat = _attr(site, "aif:site:latitude", None); p.site_lon = _attr(site, "aif:site:longitude", None)
     src.append(f"site={p.site_key} ← /World/Site 變體 site" if p.site_key else "site ← 後備（/World/Site 沒有 aif:site:key）")
+    gp, gf, ga = _attr(site, "thermal:coolantGlycolPct"), _attr(site, "thermal:glycolPumpFactor"), _attr(site, "thermal:glycolApproachAddK")
+    if gp is not None and gf is not None and ga is not None:
+        p.glycol_pct, p.glycol_pump_factor, p.glycol_approach_add_k = float(gp), float(gf), float(ga)
+        src.append(f"防凍液 丙二醇 {p.glycol_pct:g}%：泵 ×{p.glycol_pump_factor:g}、乾冷卻器接近 +{p.glycol_approach_add_k:g} K ← /World/Site thermal:coolantGlycolPct / glycolPumpFactor / glycolApproachAddK")
+    else:
+        src.append("防凍液 ← 後備 25%（/World/Site 沒有 thermal:coolantGlycolPct）")
     return p
 
 
@@ -226,6 +237,11 @@ def read_cost_coef(stage):
     return got, missing
 
 
+def site_elec_price(stage, default=0.10):
+    a = stage.GetPrimAtPath("/World/Site").GetAttribute("aif:site:electricityUsdPerKwh")
+    return float(a.Get()) if a and a.HasValue() else default
+
+
 def site_t_max(stage, default=35.0):
     a = stage.GetPrimAtPath("/World/Site").GetAttribute("aif:site:tMax20yC")
     return float(a.Get()) if a and a.HasValue() else default
@@ -239,6 +255,8 @@ def write_capex(stage, cx: dict, layer=None, basis=""):
     def setd(n, v): prim.CreateAttribute(n, Sdf.ValueTypeNames.Double, custom=True).Set(float(v))
     setd("cost:total_usd", cx["total"]); setd("cost:it_usd", cx["it"]); setd("cost:facility_usd", cx["facility"])
     for k, v in cx["items"].items(): setd(f"cost:item:{k}", v)
+    for k in ("energy_usd_per_year", "tco_usd_per_year"):
+        if k in cx: setd(f"cost:{k}", cx[k])
     if basis: prim.CreateAttribute("cost:basis", Sdf.ValueTypeNames.String, custom=True).Set(basis)
     return prim
 

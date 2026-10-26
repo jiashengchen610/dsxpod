@@ -3,7 +3,7 @@
 import { plan } from './sizing.js';
 import { PodScene, ENV } from './scene.js';
 import { PRODUCTS, defaultSku, spec as prodSpec } from './products.js';   // 產品 / SKU 唯一來源（dsxpod/products.py 產生）
-import { capex } from './capex.js';                                           // 造價：dsxpod/capex.py 產生（同一套規則，係數也在 USD）
+import { capex, opex, ELEC } from './capex.js';                                           // 造價：dsxpod/capex.py 產生（同一套規則，係數也在 USD）
 import { t, lang, locale, setLang, applyStatic, siteName, koppenName, landName, warnText } from './i18n.js';
 applyStatic();                                                  // 靜態文字先套語言（載入畫面也要）
 
@@ -22,21 +22,20 @@ const isGadu = () => state.product === 'gadu';
 const supLabel = s => s === 't28' ? `CHW ${SK().chws_c} °C` : SUP[s];      // GADU 的供水標籤依 SKU 的冰水溫度
 const SITE_ORDER = ['taoyuan', 'johor', 'phoenix', 'dallas', 'dublin', 'oslo'];
 // 算力：NVIDIA Vera Rubin NVL72 公開規格（每櫃 72 GPU；NVFP4 推論 3.6 EF〔effective〕、訓練 2.5 EF；2026 年資料，正式規格可能再變）。
-// 注意：能耗模型的每櫃功率仍用 GB300 代理（136 kW），Vera Rubin 每櫃約 190–230 kW；算力與功率來自不同代，正式數字公開後一起換。
+// 每櫃功率：Vera Rubin NVL72 230 kW（Max-P），DSX POD 與 GADU 一致（products.py）。
 const RUBIN = { gpus: 72, pf_inf: 3600, pf_train: 2500 };
 
 const store = { get(k, d) { try { const v = localStorage.getItem('dsxpod:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('dsxpod:' + k, JSON.stringify(v)); } catch {} } };
-const state = Object.assign({ site: 'johor', sizeMode: 'site', mw: 10, siteL: 120, siteW: 100, cooling: 'dry_only', supply: 't45', product: 'dsx_pod', sku: null }, store.get('state', {}));
+const state = Object.assign({ site: 'johor', sizeMode: 'mw', mw: 10, siteL: 120, siteW: 100, units: 6, cooling: 'dry_only', supply: 't45', product: 'dsx_pod', sku: null }, store.get('state', {}));
+state.sizeMode = 'mw'; state.mw = 10;                              // 啟動固定從 10 MW 開始（使用者 2026-10-26）；網址有規模參數時下面會覆寫
 if (!PRODUCTS[state.product]) state.product = 'dsx_pod';
 if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
 // 手機 / 窄螢幕：上方一行儀表板（點開看細節）、下方設定面板（點分頁展開）
 const MQ = matchMedia('(max-width: 900px)');
 const applyMobile = () => { document.body.classList.toggle('mobile', MQ.matches); if (!MQ.matches) document.body.classList.remove('menu-open', 'sheet-open');
-  (MQ.matches ? $('#nav') : document.body).appendChild($('#toolbar'));
-  // 手機上方面板預設「總覽」分頁；桌機沒有總覽分頁（儀表板常駐），回到摘要
-  const dt = $('#data .tab[data-tab="dash"]');
-  if (dt) { if (MQ.matches && !$('#data .tab.active')?.dataset.tab) dt.click(); if (!MQ.matches && dt.classList.contains('active')) $('#data .tab[data-tab="sum"]').click(); } };   // 工具列：桌機浮在左下，手機放進設定面板底部
+
+};   // 工具列：桌機浮在左下，手機放進設定面板底部
 // 手機設定面板打開時，3D 中心點移到畫面上緣 25%（露出來那一半的中間），調參數時看得到模型
 const syncFocus = () => scene && scene.setFocusY(document.body.classList.contains('mobile') && document.body.classList.contains('menu-open') ? 0.25 : 0.5);
 new MutationObserver(syncFocus).observe(document.body, { attributes: true, attributeFilter: ['class'] });
@@ -54,15 +53,16 @@ const Q = new URLSearchParams(location.search);
 for (const k of ['site', 'product', 'sku']) if (Q.get(k)) state[k] = Q.get(k);
 if (!PRODUCTS[state.product]) state.product = 'dsx_pod'; if (state.sku && !PRODUCTS[state.product].skus[state.sku]) state.sku = null;
 if (Q.get('mw')) { state.sizeMode = 'mw'; state.mw = +Q.get('mw'); }
+if (Q.get('units')) { state.sizeMode = 'units'; state.units = Math.max(1, Math.round(+Q.get('units'))); }
 if (Q.get('site_l') && Q.get('site_w')) { state.sizeMode = 'site'; state.siteL = +Q.get('site_l'); state.siteW = +Q.get('site_w'); }
 const GRIDS = {};
 let CLIM, GRID, scene, layout, lastPods = -1, lastSite = null, lastProd = null, apiOK = false;
 const charts = {};
 
 // ---------------------------------------------------------------- 資料
-function interp(site, cooling, supply, itMW) {
-  const G = GRIDS[state.product]; if (!G) return null;
-  const rows = G.rows.filter(r => (r.product || 'dsx_pod') === state.product && (!isGadu() || r.sku === skuKey()) && r.site === site && r.cooling === cooling && r.supply === supply).sort((a, b) => a.it_mw - b.it_mw);
+function interp(site, cooling, supply, itMW, product = state.product, sku = skuKey()) {
+  const G = GRIDS[product]; if (!G) return null;
+  const rows = G.rows.filter(r => (r.product || 'dsx_pod') === product && (product !== 'gadu' || r.sku === sku) && r.site === site && r.cooling === cooling && r.supply === supply).sort((a, b) => a.it_mw - b.it_mw);
   if (!rows.length) return null;
   const x = Math.log(Math.min(Math.max(itMW, rows[0].it_mw), rows[rows.length - 1].it_mw));
   let a = rows[0], b = rows[0];
@@ -83,9 +83,9 @@ function interp(site, cooling, supply, itMW) {
 
 // 散熱自動決定（使用者 2026-10-26：0 小時是切點）：純乾冷卻器在 20 年逐時資料裡平均與最差一年都 0 小時排不掉熱 → 用它（省掉冰水機）；
 // 否則加輔助冰水機（各場址各規模都 0 小時）。供水固定 45 °C（DSX 規格）。GADU 固定冰水機。
-function autoCool(itMW) {
-  if (isGadu()) return { c: 'chilled_water', s: 't28', dry: null };
-  const dry = interp(state.site, 'dry_only', 't45', itMW);
+function autoCool(itMW, site = state.site, product = state.product, sku = skuKey()) {
+  if (product === 'gadu') return { c: 'chilled_water', s: 't28', dry: null };
+  const dry = interp(site, 'dry_only', 't45', itMW, product, sku);
   const ok = !!dry && dry.unmet_h < 1e-6 && dry.unmet_h_max === 0;
   return { c: ok ? 'dry_only' : 'dry_plus_chiller', s: 't45', dry };
 }
@@ -112,14 +112,30 @@ function siteCards() {
 // ---------------------------------------------------------------- UI：規模
 const mwFromSlider = v => Math.round(Math.pow(10, (v / 1000) * 3) * 10) / 10;
 const sliderFromMw = mw => Math.round(Math.log10(Math.max(1, mw)) / 3 * 1000);
+// 規模換算：總電量 / 基地範圍 / 貨櫃數量（數量 × 每單元 MW → 同一條 plan(mw) 路徑，sizing 兩邊不用改）
+const unitMw = (product = state.product, sku = state.sku) => prodSpec(product, sku)[1].it_mw;
+const maxUnits = (product = state.product, sku = state.sku) => Math.floor(1000 / unitMw(product, sku) + 1e-9);
+function planFor(c) {
+  const sku = c.product === 'gadu' ? c.sku : null;
+  if (c.sizeMode === 'units') return plan({ mw: Math.min(c.units, maxUnits(c.product, sku)) * unitMw(c.product, sku), product: c.product, sku });
+  return c.sizeMode === 'mw' ? plan({ mw: c.mw, product: c.product, sku }) : plan({ siteL: c.siteL, siteW: c.siteW, product: c.product, sku });
+}
+// 基地滑桿上限：放滿 1 GW 需要的基地（依產品 / SKU）× 1.15；再大也不會多放單元
+const siteMaxSide = () => { const cap = plan({ mw: 1000, product: state.product, sku: state.sku }); return Math.min(1500, Math.ceil(Math.max(...cap.site_m) * 1.15 / 10) * 10); };
 function sizeUI() {
+  const mx = siteMaxSide(); for (const id of ['#slRange', '#swRange']) $(id).max = mx;
+  state.siteL = Math.min(state.siteL, mx); state.siteW = Math.min(state.siteW, mx);
   $$('#sizeMode button').forEach(b => { b.classList.toggle('on', b.dataset.mode === state.sizeMode); b.onclick = () => { state.sizeMode = b.dataset.mode; sizeUI(); update(); }; });
-  $('#sizeMW').hidden = state.sizeMode !== 'mw'; $('#sizeSite').hidden = state.sizeMode !== 'site';
+  $('#sizeMW').hidden = state.sizeMode !== 'mw'; $('#sizeSite').hidden = state.sizeMode !== 'site'; $('#sizeUnits').hidden = state.sizeMode !== 'units';
+  const mu = maxUnits(); state.units = Math.min(Math.max(1, state.units || 1), mu);
+  $('#unRange').max = mu; $('#unInput').max = mu; $('#unRange').value = state.units; $('#unInput').value = state.units; $('#unOut').textContent = fmt(state.units);
   $('#mwRange').value = sliderFromMw(state.mw); $('#mwInput').value = state.mw; $('#mwOut').textContent = `${fmt(state.mw, state.mw < 10 ? 1 : 0)} MW`;
   $('#slRange').value = state.siteL; $('#swRange').value = state.siteW; $('#slOut').textContent = `${state.siteL} m`; $('#swOut').textContent = `${state.siteW} m`;
 }
 $('#mwRange').oninput = e => { state.mw = mwFromSlider(+e.target.value); sizeUI(); update(); };
 $('#mwInput').onchange = e => { state.mw = Math.min(1000, Math.max(0.5, +e.target.value || 1)); sizeUI(); update(); };
+$('#unRange').oninput = e => { state.units = +e.target.value; sizeUI(); update(); };
+$('#unInput').onchange = e => { state.units = Math.max(1, Math.round(+e.target.value || 1)); sizeUI(); update(); };
 $('#slRange').oninput = e => { state.siteL = +e.target.value; sizeUI(); update(); };
 $('#swRange').oninput = e => { state.siteW = +e.target.value; sizeUI(); update(); };
 
@@ -131,12 +147,14 @@ let dashBase = null, dashTimer = null;
 const fmtMW = mw => mw >= 1000 ? `${fmt(mw / 1000, 2)}<small>GW</small>` : `${fmt(mw, mw < 100 ? 1 : 0)}<small>MW</small>`;
 const fmtN = v => fmt(v, v > 0 && v < 10 ? 1 : 0);
 const fmtUSD = (v, d) => v >= 1e9 ? `${fmt(v / 1e9, 2)}<small>B</small>` : `${fmt(v / 1e6, d ?? (v < 1e8 ? 1 : 0))}<small>M</small>`;
-let CX = null;                                                     // 目前配置的造價（capex.js）
+let CX = null, OP = null;                                          // 目前配置的造價與營運（capex.js）
+const fmtK = v => v >= 1e6 ? `${fmt(v / 1e6, 2)}<small>M</small>` : `${fmt(v / 1e3, v < 1e4 ? 1 : 0)}<small>k</small>`;
 function dashboard(m) {
   const sk = SK(), ef = layout.n_pods * sk.pf_inf_total / 1000, gpus = layout.n_pods * sk.gpus;
   CX = capex(layout, state.product, skuKey(), state.cooling, m.recirc_k + m.island_k, CLIM[state.site].extremes.t_max);
-  const v = { ef, mw: layout.it_mw * m.pue_mean, ha: layout.area_ha, usd: CX.total };
-  v.kw_ef = v.mw * 1000 / ef; v.m2_ef = v.ha * 1e4 / ef; v.usd_ef = v.usd / ef;
+  OP = opex(m.it_mwh, m.facility_mwh, ELEC[state.site].usd_kwh, CX.total);
+  const v = { ef, mw: layout.it_mw * m.pue_mean, ha: layout.area_ha, usd: CX.total, opx: OP.energy_usd_per_year };
+  v.kw_ef = v.mw * 1000 / ef; v.m2_ef = v.ha * 1e4 / ef; v.usd_ef = v.usd / ef; v.opx_ef = v.opx / ef;
   if (!dashBase) dashBase = v;
   const dl = (k, lowerIsGood) => {
     const a = dashBase[k], b = v[k];
@@ -149,6 +167,7 @@ function dashboard(m) {
     ['dash.power', 'dash.power.t', `${fmtMW(v.mw)}${dl('mw')}`, `${fmt(v.kw_ef)}<small>kW</small>${dl('kw_ef', true)}`],
     ['dash.land', 'dash.land.t', `${fmt(v.ha, v.ha < 100 ? 2 : 0)}<small>ha</small>${dl('ha')}`, `${fmtN(v.m2_ef)}<small>m²</small>${dl('m2_ef', true)}`],
     ['dash.cost', 'dash.cost.t', `$${fmtUSD(v.usd)}${dl('usd')}`, `$${fmtUSD(v.usd_ef, 2)}${dl('usd_ef', true)}`],
+    ['dash.opex', 'dash.opex.t', `$${fmtUSD(v.opx)}${dl('opx')}`, `$${fmtK(v.opx_ef)}${dl('opx_ef', true)}`],
   ];
   $('#dash').innerHTML = `<div class="dash-top"><b>${fmt(ef, ef < 100 ? 1 : 0)}<small>EF</small>${dl('ef')}</b><span>${isGadu() ? t('kpi.compute.g', { gpus: fmt(gpus), model: sk.name }) : t('kpi.compute', { gpus: fmt(gpus) })}</span></div>` +
     `<table class="dash-t"><thead><tr><th></th><th>${t('dash.total')}</th><th>${t('dash.perEF')}</th></tr></thead><tbody>` +
@@ -189,7 +208,11 @@ function kpis(m) {
   const grp = { 'cx.compute': ['compute'], 'cx.network': ['network'], 'cx.unit': ['container', 'cdu', 'inrow'], 'cx.cooling': ['dry_cooler', 'chiller'], 'cx.power': ['power_center', 'substation'], 'cx.site': ['site_works', 'buildings'] };
   const capexTable = `<h4 class="sub">${t('cx.title')}</h4><table class="cx"><tbody>` + Object.entries(grp).map(([k, ks]) => { const u = ks.reduce((a, x) => a + (CX.items[x] || 0), 0);
     return `<tr><td>${t(k)}</td><td>$${fmtUSD(u, u < 1e7 ? 2 : 1)}</td><td>${fmt(u / CX.total * 100, u / CX.total < 0.01 ? 2 : 1)}%</td></tr>`; }).join('') +
-    `<tr class="tot"><td>${t('cx.total')}</td><td>$${fmtUSD(CX.total)}</td><td>100%</td></tr></tbody></table><p class="hint">${t('cx.hint')}</p>`;
+    `<tr class="tot"><td>${t('cx.total')}</td><td>$${fmtUSD(CX.total)}</td><td>100%</td></tr></tbody></table><p class="hint">${t('cx.hint')}</p>` +
+    `<h4 class="sub">${t('op.title')}</h4><table class="cx"><tbody>` +
+    `<tr><td>${t('op.price')}</td><td colspan="2">$${fmt(ELEC[state.site].usd_kwh, 3)} / kWh</td></tr>` +
+    `<tr><td>${t('op.energy')}</td><td colspan="2">$${fmtUSD(OP.energy_usd_per_year)} ${t('op.peryr')}</td></tr>` +
+    `<tr class="tot"><td>${t('op.tco')}</td><td colspan="2">$${fmtUSD(OP.tco_usd_per_year)} ${t('op.peryr')}</td></tr></tbody></table><p class="hint">${t('op.hint', { src: ELEC[state.site].source })}</p>`;
   $('#sumNotes').innerHTML = capexTable + '<ul>' + notes.map(n => `<li>${n}</li>`).join('') + '</ul>' +
     `<details><summary>${t('note.more')}</summary><ul><li>${t(isGadu() ? 'note.gadu' : 'note.rubin')}</li><li>${t('note.screen')}</li></ul></details>`;
 }
@@ -245,11 +268,11 @@ const swapI18n = (sel, key) => { const el = $(sel); if (el) { el.dataset.i18n = 
 function productUI() {
   const g = isGadu();
   $$('#productSeg button').forEach(b => { b.classList.toggle('on', b.dataset.p === state.product); b.onclick = () => setProduct(b.dataset.p, null); });
+  $('#productLink').href = PR().url;                               // 官方產品頁（products.py）
   const sel = $('#skuSel'); sel.hidden = !g;
   sel.innerHTML = Object.entries(PR().skus).map(([k, s]) => `<option value="${k}"${k === skuKey() ? ' selected' : ''}>${s.name} · ${s.it_mw} MW</option>`).join('');
   sel.onchange = () => setProduct(state.product, sel.value);
   document.body.classList.toggle('gadu', g);
-  if (g && $('#data .tab[data-tab="cmp"]').classList.contains('active')) $('#data .tab[data-tab="sum"]').click();   // GADU 只有一種散熱，比較分頁隱藏
   swapI18n('[data-pane="unit"] > p.hint', g ? 'unit.hint.gadu' : 'unit.hint'); swapI18n('[data-pane="unit"] > p.hint:last-of-type', g ? 'unit.official.gadu' : 'unit.official');
   swapI18n('#unitSeg [data-view="unit"] small', g ? 'unit.inside.s.gadu' : 'unit.inside.s');
   swapI18n('#unitSeg [data-view="cool"] span', g ? 'unit.cool.gadu' : 'unit.cool'); swapI18n('#unitSeg [data-view="cool"] small', g ? 'unit.cool.gadu.s' : 'unit.cool.s');
@@ -258,23 +281,30 @@ function productUI() {
 async function setProduct(p, sku) {
   state.product = p; state.sku = sku;
   await ensureGrid(p);
-  productUI(); unitFacts(); update();
+  productUI(); unitFacts(); sizeUI(); update();
 }
 
 // ---------------------------------------------------------------- 單元（一個 POD 的組成）
 const curView = () => $('#nav .tab.active')?.dataset.tab || 'site';
+// 官方資料連結（products.py：產品頁、發表新聞稿、SKU 規格頁、整合商自家頁）
+const extA = (href, text) => href ? `<a class="ext" href="${href}" target="_blank" rel="noopener">${text} ↗</a>` : '';
+function linksRow() {
+  const pr = PR(), sk = SK();
+  return [t('unit.links'), [extA(pr.url, t('link.product')), extA(pr.press_url, t('link.press')), extA(sk.url, t('link.sku', { name: sk.name })),
+    extA(sk.vendor_url, t('link.vendor', { vendor: pr.vendor }))].filter(Boolean).join('<br>')];
+}
 function unitFacts() {
   const racks = 7, sk = SK();
   if (isGadu()) {
     $('#unitFacts').innerHTML = [[t('unit.racks'), t('unit.g.racks.v', { c: sk.racks_compute, model: sk.name, n: sk.racks_network, u: sk.rack_u, gpus: fmt(sk.gpus) })],
       [t('unit.compute'), t('unit.g.compute.v', { pf: fmt(sk.pf_inf_total) })], [t('unit.it'), t('unit.g.it.v', { mw: sk.it_mw })],
       [t('unit.g.cool'), t('unit.g.cool.v', { cdu: sk.cdus, irc: sk.inrow_coolers, ch: sk.chillers, chw: sk.chws_c })],
-      [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.g.power.v')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+      [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.g.power.v')], linksRow()].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
     return;
   }
   $('#unitFacts').innerHTML = [[t('unit.racks'), t('unit.racks.v', { n: racks, gpus: racks * RUBIN.gpus })], [t('unit.compute'), t('unit.compute.v', { pf: fmt(racks * RUBIN.pf_inf) })],
-    [t('unit.it'), t('unit.it.v', { mw: fmt(racks * 136 / 1000, 3) })], [t('unit.cdu'), t('unit.cdu.v')], [t('unit.mod'), t('unit.mod.v')],
-    [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.skid.v')], [t('unit.weight'), '28,500 kg']].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    [t('unit.it'), t('unit.it.v', { mw: fmt(sk.it_mw, 2), kw: fmt(sk.rack_kw) })], [t('unit.cdu'), t('unit.cdu.v')], [t('unit.mod'), t('unit.mod.v')],
+    [t('unit.box'), t('unit.box.v')], [t('unit.skid'), t('unit.skid.v')], [t('unit.weight'), '28,500 kg'], linksRow()].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 }
 
 // ---------------------------------------------------------------- 主更新
@@ -282,13 +312,13 @@ function update() {
   store.set('state', state);
   const prodKey = `${state.product}:${skuKey()}`;
   if (prodKey !== lastProd) { scene.setProduct(PR(), SK()); lastProd = prodKey; lastPods = -1; }
-  layout = state.sizeMode === 'mw' ? plan({ mw: state.mw, product: state.product, sku: state.sku }) : plan({ siteL: state.siteL, siteW: state.siteW, product: state.product, sku: state.sku });
+  layout = planFor(state);
   const key = `${prodKey}:${layout.mode}:${layout.n_pods}:${layout.site_m}`;
   const siteChanged = state.site !== lastSite, layoutChanged = key !== lastPods;
   if (siteChanged) { scene.setEnvironment(state.site, CLIM[state.site].lat, !layoutChanged); lastSite = state.site; }   // 換氣候帶 → 換天空、地面、植被
   if (layoutChanged) { const first = lastPods === -1; scene.setLayout(layout); scene.setView(curView(), { animate: !first, duration: 700 }); lastPods = key; }
   $('#sizeFacts').innerHTML = [[t(isGadu() ? 'size.units' : 'size.pods'), t('size.pods.v', { n: fmt(layout.n_pods), racks: fmt(layout.n_pods * SK().racks_total) })], [t('size.it'), `${fmt(layout.it_mw, 1)} MW`], [t('size.base'), `${fmt(layout.site_m[0])} × ${fmt(layout.site_m[1])} m`],
-    [t('size.area'), `${fmt(layout.area_ha, 2)} ha`], [t('size.blocks'), layout.n_blocks > 1 ? t('size.blocks.v', { n: layout.n_blocks }) : t('size.single')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    [t('size.area'), `${fmt(layout.area_ha, 2)} ha`], [t('size.blocks'), layout.n_blocks > 1 ? t('size.blocks.v', { n: layout.n_blocks, pods: 56, mw: fmt(56 * layout.unit_mw) }) : t('size.single')]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   $('#sizeWarn').textContent = layout.warnings.map(warnText).join(lang === 'en' ? '; ' : '；');
   const auto = autoCool(layout.it_mw); state.cooling = auto.c; state.supply = auto.s; store.set('state', state);
   const all = {}; for (const c of coolKeys()) all[c] = interp(state.site, c, state.supply, layout.it_mw);
@@ -296,8 +326,108 @@ function update() {
   coolBox(m, auto);
   const site = CLIM[state.site];
   $('#summaryChip').textContent = `${PR().short}${isGadu() ? ' ' + SK().name : ''}・${siteName(state.site, site)} (${site.koppen})・${fmt(layout.it_mw, layout.it_mw < 10 ? 1 : 0)} MW・${t(COOL[state.cooling])}・${supLabel(state.supply)}・PUE ${fmt(m.pue_mean, 3)}`;
-  kpis(m); yearChart(all); mixChart(m); cmpTable(all); climCharts();
+  kpis(m); yearChart(all); mixChart(m); cmpTable(all); climCharts(); scnUI();
 }
+
+// ---------------------------------------------------------------- 方案比較（最多 3 個；存在 localStorage，分享時編進網址 scn=）
+const SCN_IDS = ['A', 'B', 'C'];
+let SCN = store.get('scn', []);
+const cfgOf = () => ({ site: state.site, product: state.product, sku: skuKey(), sizeMode: state.sizeMode, mw: state.mw, siteL: state.siteL, siteW: state.siteW, units: state.units });
+const encScn = list => list.map(c => [c.id, c.site, c.product, c.sku, c.sizeMode === 'mw' ? `m${c.mw}` : c.sizeMode === 'units' ? `u${c.units}` : `s${c.siteL}x${c.siteW}`].join('-')).join('~');   // 方案間 ~、欄位間 -（SKU 名有底線、MW 可有小數點）
+function decScn(str) {
+  return (str || '').split('~').map(x => x.split('-')).filter(a => a.length === 5 && SCN_IDS.includes(a[0]) && SITE_ORDER.includes(a[1])).map(([id, site, product, sku, sz]) => {
+    const c = { id, site, product, sku, sizeMode: { m: 'mw', u: 'units', s: 'site' }[sz[0]] || 'mw', mw: 10, siteL: 120, siteW: 100, units: 6 };
+    if (c.sizeMode === 'mw') c.mw = +sz.slice(1); else if (c.sizeMode === 'units') c.units = +sz.slice(1); else [c.siteL, c.siteW] = sz.slice(1).split('x').map(Number);
+    return PRODUCTS[product] && PRODUCTS[product].skus[sku] ? c : null; }).filter(Boolean).slice(0, 3);
+}
+if (Q.get('scn')) SCN = decScn(Q.get('scn'));
+const saveScnStore = () => store.set('scn', SCN);
+function metricsFor(c) {                                       // 一個方案的主要數字（和儀表板同一套算法）
+  const lay = planFor(c);
+  const au = autoCool(lay.it_mw, c.site, c.product, c.sku), m = interp(c.site, au.c, au.s, lay.it_mw, c.product, c.sku); if (!m) return null;
+  const sk = PRODUCTS[c.product].skus[c.sku], ef = lay.n_pods * sk.pf_inf_total / 1000;
+  const cx = capex(lay, c.product, c.sku, au.c, m.recirc_k + m.island_k, CLIM[c.site].extremes.t_max), op = opex(m.it_mwh, m.facility_mwh, ELEC[c.site].usd_kwh, cx.total);
+  const mw = lay.it_mw * m.pue_mean;
+  return { lay, m, sk, ef, mw, ha: lay.area_ha, usd: cx.total, opx: op.energy_usd_per_year, tco: op.tco_usd_per_year, cool: au.c,
+           kw_ef: mw * 1000 / ef, m2_ef: lay.area_ha * 1e4 / ef, usd_ef: cx.total / ef, tco_ef: op.tco_usd_per_year / ef };
+}
+async function loadScn(c) {                                    // 點欄頭 / 標籤：整個配置換過去（3D 與左側設定一起）
+  Object.assign(state, { site: c.site, product: c.product, sku: c.product === 'gadu' ? c.sku : null, sizeMode: c.sizeMode, mw: c.mw, siteL: c.siteL, siteW: c.siteW, units: c.units ?? state.units });
+  await ensureGrid(c.product);
+  $$('.site').forEach(x => x.classList.toggle('on', x.dataset.site === state.site)); sizeUI(); productUI(); unitFacts(); update();
+}
+function scnUI() {
+  const full = SCN.length >= 3, b = $('#saveScn');
+  b.disabled = full; b.textContent = full ? t('scn.full') : t('scn.save');
+  $('#cartN').textContent = SCN.length; $('#openCmp').hidden = !SCN.length;
+  $('#scnChips').innerHTML = SCN.map(c => `<span class="chip" data-id="${c.id}"><b>● ${c.id}</b><span class="t">${siteName(c.site, CLIM[c.site])}・${PRODUCTS[c.product].short}${c.product === 'gadu' ? ' ' + PRODUCTS[c.product].skus[c.sku].name.replace(/^(NVIDIA|AMD) /, '') : ''}</span><button class="x" aria-label="${t('scn.del')}" data-del="${c.id}">×</button></span>`).join('');
+  $$('#scnChips .chip').forEach(el => el.onclick = e => { const del = e.target.dataset.del; if (del) { SCN = SCN.filter(c => c.id !== del); saveScnStore(); scnUI(); return; } loadScn(SCN.find(c => c.id === el.dataset.id)); });
+  scnTable();
+}
+$('#saveScn').onclick = () => {
+  if (SCN.length >= 3) return;
+  const id = SCN_IDS.find(i => !SCN.some(c => c.id === i)); SCN.push({ id, ...cfgOf() }); SCN.sort((a, b) => a.id.localeCompare(b.id)); saveScnStore(); scnUI();
+  $('#exportHint').textContent = t('scn.saved', { id });
+};
+// 全畫面比較表：開 / 關（× 、Esc、點背景）
+function openCmp(on) { $('#cmpModal').hidden = !on; if (on) scnTable(); }
+$('#openCmp').onclick = () => openCmp(true);
+$('#cmpClose').onclick = () => openCmp(false);
+$('#cmpModal').onclick = e => { if (e.target === $('#cmpModal')) openCmp(false); };
+addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#cmpModal').hidden) openCmp(false); });
+async function scnTableAsync() { for (const c of SCN) await ensureGrid(c.product); scnTable(true); }
+function scnTable(ready) {
+  const box = $('#scnTable'); if (!box) return;
+  if (!SCN.length) { box.innerHTML = `<p class="hint">${t('scn.empty')}</p>`; $('#shareBtn').hidden = true; return; }
+  $('#shareBtn').hidden = false;
+  if (!ready && SCN.some(c => !GRIDS[c.product])) { scnTableAsync(); return; }
+  const R = SCN.map(c => ({ c, r: metricsFor(c) }));
+  const cell = (r, f) => r ? f(r) : '–';
+  const best = key => { const vals = R.filter(x => x.r).map(x => x.r[key]); return vals.length > 1 ? Math.min(...vals) : null; };
+  const skuName = c => PRODUCTS[c.product].skus[c.sku].name.replace(/^(NVIDIA|AMD) /, '');
+  const cfg = [
+    ['scn.site', (r, c) => `${siteName(c.site, CLIM[c.site])}<small>${CLIM[c.site].koppen}</small>`],
+    ['scn.product', (r, c) => PRODUCTS[c.product].short], ['scn.sku', (r, c) => skuName(c)],
+    ['scn.scale', r => `${fmt(r.lay.it_mw, r.lay.it_mw < 10 ? 1 : 0)}<small>MW</small> · ${fmt(r.lay.n_pods)}<small>${t('scn.units')}</small>`],
+    ['scn.base', r => `${fmt(r.lay.site_m[0])} × ${fmt(r.lay.site_m[1])}<small>m</small>`],
+    ['scn.cool', r => t(COOL[r.cool])], ['PUE', r => fmt(r.m.pue_mean, 3)],
+  ];
+  const tot = [
+    ['scn.compute', r => `${fmt(r.ef, r.ef < 100 ? 1 : 0)}<small>EF</small>`],
+    ['dash.power', r => fmtMW(r.mw)], ['dash.land', r => `${fmt(r.ha, r.ha < 100 ? 2 : 0)}<small>ha</small>`],
+    ['dash.cost', r => `$${fmtUSD(r.usd)}`], ['dash.opex', r => `$${fmtUSD(r.opx)}`], ['scn.tco', r => `$${fmtUSD(r.tco)}`],
+  ];
+  const per = [['dash.power', 'kw_ef', r => `${fmt(r.kw_ef)}<small>kW</small>`], ['dash.land', 'm2_ef', r => `${fmtN(r.m2_ef)}<small>m²</small>`],
+               ['dash.cost', 'usd_ef', r => `$${fmtUSD(r.usd_ef, 2)}`], ['scn.tco', 'tco_ef', r => `$${fmtK(r.tco_ef)}`]];
+  const lab = k => k === 'PUE' ? 'PUE' : t(k);
+  // ⓘ：點了在該列下方展開計算方式（ex.* 字串）；每 EF 段只在段落標題放一個
+  const EXK = { 'scn.site': 'ex.site', 'scn.product': 'ex.product', 'scn.sku': 'ex.sku', 'scn.scale': 'ex.scale', 'scn.base': 'ex.base', 'scn.cool': 'ex.cool', PUE: 'ex.pue',
+    'scn.compute': 'ex.compute', 'dash.power': 'ex.power', 'dash.land': 'ex.land', 'dash.cost': 'ex.cost', 'dash.opex': 'ex.opex', 'scn.tco': 'ex.tco', 'scn.perEF': 'ex.perEF' };
+  const info = k => EXK[k] ? `<button class="info" data-ex="${EXK[k]}" aria-label="${t('ex.aria')}" title="${t('ex.aria')}">i</button>` : '';
+  const sec = k => `<tr class="sec"><th colspan="${R.length + 1}">${t(k)}${k === 'scn.perEF' ? info(k) : ''}</th></tr>`;
+  const head = R.map(({ c }) => `<th class="scn-h" data-id="${c.id}" title="${t('scn.load')}"><b>● ${c.id}</b><span>${PRODUCTS[c.product].short} ${c.product === 'gadu' ? skuName(c) : ''}</span><span>${siteName(c.site, CLIM[c.site])}</span></th>`).join('');
+  box.innerHTML = `<table class="scn"><thead><tr><th></th>${head}</tr></thead><tbody>` +
+    sec('scn.sec.cfg') + cfg.map(([k, f]) => `<tr><th>${lab(k)}${info(k)}</th>${R.map(({ c, r }) => `<td>${r ? f(r, c) : '–'}</td>`).join('')}</tr>`).join('') +
+    sec('scn.sec.tot') + tot.map(([k, f]) => `<tr><th>${lab(k)}${info(k)}</th>${R.map(({ r }) => `<td>${cell(r, f)}</td>`).join('')}</tr>`).join('') +
+    sec('scn.perEF') + per.map(([k, key, f]) => { const b = best(key); return `<tr><th>${lab(k)}</th>${R.map(({ r }) => r && b !== null && Math.abs(r[key] - b) < 1e-9 ? `<td class="best">${f(r)} ★</td>` : `<td>${cell(r, f)}</td>`).join('')}</tr>`; }).join('') +
+    '</tbody></table>';
+  $$('#scnTable .scn-h').forEach(th => th.onclick = () => { openCmp(false); loadScn(SCN.find(c => c.id === th.dataset.id)); });
+  $$('#scnTable .info').forEach(b => b.onclick = e => {
+    e.stopPropagation(); const tr = b.closest('tr'), nx = tr.nextElementSibling;
+    if (nx && nx.classList.contains('ex')) { nx.remove(); b.classList.remove('on'); return; }
+    tr.insertAdjacentHTML('afterend', `<tr class="ex"><td colspan="${R.length + 1}">${t(b.dataset.ex)}</td></tr>`); b.classList.add('on');
+  });
+  $('#scnHint').textContent = t('scn.hint');
+}
+$('#shareBtn').onclick = async () => {
+  const c = cfgOf(), u = new URL(location.origin + location.pathname);
+  u.searchParams.set('site', c.site); u.searchParams.set('product', c.product); if (c.product === 'gadu') u.searchParams.set('sku', c.sku);
+  if (c.sizeMode === 'mw') u.searchParams.set('mw', c.mw); else if (c.sizeMode === 'units') u.searchParams.set('units', c.units); else { u.searchParams.set('site_l', c.siteL); u.searchParams.set('site_w', c.siteW); }
+  u.searchParams.set('scn', encScn(SCN)); u.searchParams.set('cmp', '1'); if (lang === 'en') u.searchParams.set('lang', 'en');
+  try { if (navigator.share && document.body.classList.contains('mobile')) { await navigator.share({ title: t('app.title'), url: u.toString() }); return; }
+        await navigator.clipboard.writeText(u.toString()); $('#scnHint').textContent = t('scn.copied'); }
+  catch { $('#scnHint').textContent = u.toString(); }
+};
 
 // ---------------------------------------------------------------- 分頁、收合、顯示、提示、匯出
 function tabs(root) { $$(`${root} .tab`).forEach(t => t.onclick = () => { $$(`${root} .tab`).forEach(x => x.classList.toggle('active', x === t)); $$(`${root} .tabpane`).forEach(p => p.classList.toggle('active', p.dataset.pane === t.dataset.tab)); Object.values(charts).forEach(c => c.resize()); }); }
@@ -342,15 +472,25 @@ function setMin(which, on) {
   if (!on) setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300);
 }
 $('#navCollapse').onclick = () => { if (document.body.classList.contains('mobile')) { document.body.classList.remove('menu-open'); return; } setMin('nav', true); };
-$('#dataCollapse').onclick = () => setMin('data', true);
+$('#dataCollapse').onclick = e => { e.stopPropagation(); if (document.body.classList.contains('data-wide')) setWide(false); else setMin('data', true); };   // 全畫面 → 退回側欄 → 再按縮到最小
 $('#navTag').onclick = () => setMin('nav', false);
 $('#dataTag').onclick = () => setMin('data', false);
 const toggleBoth = () => { const both = document.body.classList.contains('nav-min') && document.body.classList.contains('data-min'); setMin('nav', !both); setMin('data', !both); };
 $('#fsBtn').onclick = toggleBoth;
-// 右側「細節」收合：儀表板常駐，摘要 / 能耗 / 比較 / 氣候收在下面（桌機記住；手機底部面板本身就是細節）
-const setMore = on => { document.body.classList.toggle('more-open', on); $('#moreBtn').setAttribute('aria-expanded', on); store.set('more', on); if (on) setTimeout(() => Object.values(charts).forEach(c => c.resize()), 50); };
-$('#moreBtn').onclick = () => setMore(!document.body.classList.contains('more-open'));
-setMore(Q.get('tab') ? true : store.get('more', false));
+// 重設視角：關閉剖面（牆板闔上），鏡頭平滑回到目前規模的透視位置（H 鍵）
+const resetView = () => { scene && scene.setView('size'); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === 'unit')); window.__doorUI && window.__doorUI(); };
+$('#homeBtn').onclick = resetView; $('#homeFab').onclick = resetView;
+addEventListener('keydown', e => { if ((e.key === 'h' || e.key === 'H') && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) resetView(); });
+// 齒輪：畫質 / 動態 / 語言的彈出面板；點外面或 Esc 關閉
+const prefsOpen = (on) => { $('#prefs').hidden = !on; $('#prefsBtn').setAttribute('aria-expanded', on); $('#prefsBtn').classList.toggle('on', on); };
+$('#prefsBtn').onclick = e => { e.stopPropagation(); prefsOpen($('#prefs').hidden); };
+addEventListener('pointerdown', e => { if (!$('#prefs').hidden && !$('#prefs').contains(e.target) && e.target !== $('#prefsBtn')) prefsOpen(false); });
+addEventListener('keydown', e => { if (e.key === 'Escape') prefsOpen(false); });
+if (Q.get('prefs')) prefsOpen(true);                              // 測試 / 截圖用
+// 右側加寬（桌機）：側欄 ↔ 約 90% 寬，一次看到更多資料；記住選擇
+const setWide = on => { document.body.classList.toggle('data-wide', on); store.set('wide', on); setTimeout(() => Object.values(charts).forEach(c => c.resize()), 320); };
+$('#dataWide').onclick = e => { e.stopPropagation(); setWide(!document.body.classList.contains('data-wide')); };
+setWide(store.get('wide', false));
 addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) toggleBoth(); });
 { const m = Q.get('view') === 'full' ? { nav: true, data: true } : store.get('min', { nav: false, data: false }); setMin('nav', !!m.nav); setMin('data', !!m.data); }
 
@@ -387,12 +527,13 @@ async function checkApi() {
 }
 function exportUI() {
   $('#exportBtn').disabled = !apiOK;
-  $('#exportHint').textContent = apiOK ? t('export.hint', { geo: t('export.geo.' + apiGeo) }) : t('export.noapi');
+  $('#exportBtn').title = apiOK ? t('export.hint', { geo: t('export.geo.' + apiGeo) }) : t('export.noapi');   // 長說明放滑鼠提示，底部只顯示狀態訊息
+  $('#exportHint').textContent = apiOK ? '' : t('export.noapi');
 }
 $('#exportBtn').onclick = async () => {
   const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = t('export.busy');
   try {
-    const body = { site: state.site, cooling: state.cooling, supply: state.supply, product: state.product, sku: skuKey(), ...(state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
+    const body = { site: state.site, cooling: state.cooling, supply: state.supply, product: state.product, sku: skuKey(), ...(state.sizeMode === 'units' ? { mw: Math.min(state.units, maxUnits()) * unitMw() } : state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
     const r = await fetch('api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(await r.text());
     const blob = await r.blob(); const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'dsx_pod_export.zip';
@@ -406,7 +547,7 @@ $('#exportBtn').onclick = async () => {
 // ---------------------------------------------------------------- 載入進度
 // 權重：程式庫（app.js 能跑就代表已載完）、氣候摘要、結果表、兩個 GLB、建場景。CDN 可能壓縮傳輸 → 總量取 content-length 或預估值，進度一律夾在 0–1。
 const LOAD = { libs: [0.12, 1], climate: [0.03, 0], grid: [0.25, 0], 'container.glb': [0.12, 0], 'cooler_module.glb': [0.20, 0], 'power_skid.glb': [0.04, 0], 'chiller.glb': [0.07, 0], build: [0.17, 0] };
-const EST = { climate: 15e3, grid: 461e3, 'container.glb': 224e3, 'cooler_module.glb': 503e3, 'power_skid.glb': 104e3, 'chiller.glb': 258e3 };
+const EST = { climate: 15e3, grid: 461e3, 'container.glb': 48e3, 'cooler_module.glb': 88e3, 'power_skid.glb': 26e3, 'chiller.glb': 48e3 };
 const MSG = { climate: 'load.climate', grid: 'load.grid', 'container.glb': 'load.container', 'cooler_module.glb': 'load.cooler', 'power_skid.glb': 'load.skid', 'chiller.glb': 'load.chiller', build: 'load.build' };
 function progress(key, frac) {
   if (!LOAD[key]) return;                                      // 不在表上的檔案不算進度（這裡丟例外會卡住下載串流）
@@ -447,10 +588,17 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   langUI();
   tabs('#nav'); tabs('#data'); siteCards(); sizeUI(); productUI();
   $$('#data .tab').forEach(b => b.addEventListener('click', () => document.body.classList.toggle('dtab-dash', b.dataset.tab === 'dash')));
-  if (MQ.matches && !Q.get('tab')) $('#data .tab[data-tab="dash"]').click();
+  document.body.classList.toggle('dtab-dash', ($('#data .tab.active')?.dataset.tab || 'dash') === 'dash');
+  if (Q.get('cmp') || Q.get('tab') === 'cmp') openCmp(true);                   // 分享的方案比較：直接開大表
   // 分鏡：每個設定分頁一個鏡頭（氣候 = 全景、單元 = 貨櫃剖面、規模 = 整個基地）
   $$('#nav .tab').forEach(t => t.addEventListener('click', () => { scene.setView(t.dataset.tab); $$('#unitSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === 'unit')); }));
-  $$('#unitSeg button').forEach(b => b.onclick = () => { $$('#unitSeg button').forEach(x => x.classList.toggle('on', x === b)); scene.setView(b.dataset.view); });
+  $$('#unitSeg button').forEach(b => b.onclick = () => { $$('#unitSeg button').forEach(x => x.classList.toggle('on', x === b)); scene.setView(b.dataset.view); doorUI(); });
+  // 櫃門開關：停在目前鏡頭切換剖面；切到「貨櫃內部」視角時自動打開
+  const doorUI = () => { $('#doorFab').hidden = !(scene.viewMode === 'unit' || scene.doorsOpen);   // 只在看貨櫃剖面時出現
+    $$('#doorSeg button').forEach(b => { b.classList.toggle('on', (b.dataset.door === 'open') === scene.doorsOpen); b.onclick = () => { scene.setDoors(b.dataset.door === 'open'); doorUI(); }; }); };
+  window.__doorUI = doorUI;
+  $$('#nav .tab').forEach(t => t.addEventListener('click', () => setTimeout(doorUI, 0)));
+  doorUI();
   unitFacts();
   progress('build', 0.4); await paint();
   update();

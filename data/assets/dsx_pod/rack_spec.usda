@@ -30,6 +30,9 @@ over "RackSpec"
     custom float aif:spec:airCooling = 19.3 (
         doc = "kW to air"
     )
+    custom float aif:spec:curveReferenceLiquidKw = 116 (
+        doc = "liquid heat of the rack the flow / PQ curves were measured for (GB300 NVL72); other racks scale flow by LPM/kW and PQ to the same design point"
+    )
     custom float aif:spec:heatCaptureRatio = 87 (
         doc = "% of heat to liquid"
     )

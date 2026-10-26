@@ -35,8 +35,7 @@ COEF = {
     "inrow_cooler":       (3.0e4,  "USD/unit",  "in-row cooler", "estimate", "low"),
     # ---- 散熱
     "dry_cooler_per_kw":  (90.0,   "USD/kW",    "dry cooler, per kW heat rejection", "relative benchmarks only (2.6x open tower)", "low"),
-    "dry_module_kw":      (430.0,  "kW",        "heat rejection per cooler module (Vertiv MCV430)", "Vertiv model rating", "medium"),
-    "dry_modules_per_pod": (3.0,   "count",     "cooler modules per DSX POD (N+1)", "layout", "high"),
+    "dry_modules_per_pod": (3.0,   "count",     "stacked cooler sections per DSX POD (2 duty + 1 standby), each rated POD liquid heat / 2", "layout", "high"),
     "chiller_per_kw":     (250.0,  "USD/kW",    "air-cooled chiller, per kW cooling", "techno-economic literature (arXiv 2608.10999)", "medium"),
     "chiller_margin":     (1.2,    "ratio",     "chiller rated capacity / design deficit", "same as energy model", "high"),
     "trim_fws_supply_c":  (42.0,   "C",         "DSX facility water supply (45 C TCS - 3 K CDU)", "energy model", "high"),
@@ -59,6 +58,8 @@ COEF = {
     "asphalt_t":          (100.0,  "USD/t",     "hot-mix asphalt", "2026 US public bids ($70-130/t)", "high"),
     "fence_m":            (18.0,   "USD/m",     "chain-link fence material", "Fixr material-only ($5.3/ft)", "medium"),
     "building":           (3.0e5,  "USD/block", "control / substation building", "estimate", "low"),
+    # ---- 營運（只算電費；電價在場址：/World/Site aif:site:electricityUsdPerKwh）
+    "depreciation_years": (5.0,    "years",     "straight-line depreciation for annualised capex (TCO per year)", "typical AI hardware life", "medium"),
 }
 C = {k: v[0] for k, v in COEF.items()}
 
@@ -82,7 +83,8 @@ def capex(layout, product, sku, cooling, rise_k=0.0, t_max_c=35.0, c=C):
     it["network"] = it["compute"] * c["network_frac"]
     f = {"container": n * c["container"], "cdu": n * sk["cdus"] * c["cdu"], "inrow": n * sk["inrow_coolers"] * c["inrow_cooler"]}
     if product == "dsx_pod":
-        f["dry_cooler"] = n * c["dry_modules_per_pod"] * c["dry_module_kw"] * c["dry_cooler_per_kw"]
+        unit_liq_kw = sk["it_mw"] * 1000.0 * DLC_LIQUID_FRACTION   # 每台 = 液冷熱 / (台數 − 1)，裝置總容量 = 台數 × 每台
+        f["dry_cooler"] = n * c["dry_modules_per_pod"] * unit_liq_kw / (c["dry_modules_per_pod"] - 1) * c["dry_cooler_per_kw"]
         chiller_kw = 0.0
         if cooling == "dry_plus_chiller":                # 輔助冰水機：最熱一小時乾冷卻器排不掉的份額 × 液冷熱 × 餘裕
             reachable = t_max_c + rise_k + c["trim_approach_k"]
@@ -106,6 +108,12 @@ def capex(layout, product, sku, cooling, rise_k=0.0, t_max_c=35.0, c=C):
     return dict(items=items, it=tot_it, facility=tot_f, total=tot_it + tot_f)
 
 
+def opex(it_mwh, facility_mwh, usd_per_kwh, capex_total, c=C):
+    """年電費（IT + 設施，facility_mwh 不含 IT）與每年總持有成本（造價 / 折舊年 + 年電費）。"""
+    energy = (it_mwh + facility_mwh) * 1000.0 * usd_per_kwh
+    return dict(energy_usd_per_year=energy, tco_usd_per_year=capex_total / c["depreciation_years"] + energy)
+
+
 # ---------------------------------------------------------------- 前端（同一套規則的 JS 版）
 JS_FN = r"""
 const LIQ = %(liq)s;
@@ -124,7 +132,7 @@ export function capex(layout, product, sku, cooling, riseK = 0, tMaxC = 35, c = 
   const it = { compute: n * itUnitPrice(product, sku, c) }; it.network = it.compute * c.network_frac;
   const f = { container: n * c.container, cdu: n * sk.cdus * c.cdu, inrow: n * sk.inrow_coolers * c.inrow_cooler };
   if (product === 'dsx_pod') {
-    f.dry_cooler = n * c.dry_modules_per_pod * c.dry_module_kw * c.dry_cooler_per_kw;
+    f.dry_cooler = n * c.dry_modules_per_pod * sk.it_mw * 1000 * LIQ / (c.dry_modules_per_pod - 1) * c.dry_cooler_per_kw;
     let chillerKW = 0;
     if (cooling === 'dry_plus_chiller') {
       const reachable = tMaxC + riseK + c.trim_approach_k;
@@ -147,16 +155,24 @@ export function capex(layout, product, sku, cooling, riseK = 0, tMaxC = 35, c = 
   const tIt = sum(it), tF = sum(f);
   return { items, it: tIt, facility: tF, total: tIt + tF };
 }
+export function opex(itMWh, facilityMWh, usdPerKWh, capexTotal, c = C) {
+  const energy = (itMWh + facilityMWh) * 1000 * usdPerKWh;
+  return { energy_usd_per_year: energy, tco_usd_per_year: capexTotal / c.depreciation_years + energy };
+}
 """
 
 
 def write_js(path=ROOT / "web" / "js" / "capex.js"):
+    from .weather import SITES
     meta = {k: dict(unit=v[1], label=v[2], source=v[3], confidence=v[4]) for k, v in COEF.items()}
+    elec = {k: dict(usd_kwh=s["elec_usd_kwh"], source=s["elec_src"], confidence=s["elec_conf"]) for k, s in SITES.items()}
     js = ("// 由 dsxpod/capex.py 產生，不要手改：.venv\\Scripts\\python.exe -m dsxpod.capex\n"
           "// 造價：機櫃 + 地上物的設備與材料（不含土地、施工人力）；係數同時寫進 USD（/World/Plant cost:coef:*）。\n"
           "import { PRODUCTS } from './products.js';\n"
           "export const C = " + json.dumps(C, indent=1) + ";\n"
           "export const COEF_META = " + json.dumps(meta, ensure_ascii=False, indent=1) + ";\n"
+          "// 場址電價（weather.SITES；USD 在 /World/Site aif:site:electricityUsdPerKwh）\n"
+          "export const ELEC = " + json.dumps(elec, ensure_ascii=False, indent=1) + ";\n"
           + JS_FN % dict(liq=json.dumps(DLC_LIQUID_FRACTION)))
     path.write_text(js, encoding="utf-8")
     return path

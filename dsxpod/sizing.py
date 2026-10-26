@@ -1,9 +1,9 @@
 """規模換算與區塊佈局：總電量（MW）或基地長寬 → POD 數、區塊數、每個 POD 的位置。
 
 單位與假設：
-  - 輸入電量 = IT 銘牌容量。1 個 POD = 7 櫃 × 136 kW = 0.952 MW（GB300 代理；Vera Rubin 數字公開後換）。
+  - 輸入電量 = IT 銘牌容量。1 個 POD = 7 櫃 × 230 kW = 1.61 MW（Vera Rubin NVL72 Max-P；GADU 的單元 MW 依 SKU，見 products.py）。
   - POD 間距：長邊並排 3 m（維修門淨空 1.2 m + 通道）；每個 POD 東端隔 1.5 m 接一個 20 ft 電力模組，模組端牆到下一個 POD 6 m。
-  - 一個標準區塊 = 4 × 14 = 56 POD（約 53 MW）。以內是單一陣列；超過就切區塊，區塊間 12 m 道路。每塊（含單一陣列）一側留 20 m 變電站 / 配電帶。
+  - 一個標準區塊 = 4 × 14 = 56 個單元（DSX POD 約 90 MW；GADU 依 SKU）。以內是單一陣列；超過就切區塊，區塊間 12 m 道路。每塊（含單一陣列）一側留 20 m 變電站 / 配電帶。
   - 陣列一律補成完整矩形（不留缺角），所以配置容量 ≥ 要求容量；1 GW 上限時改成往下取整列。
   - 上限：1 GW、基地 1,500 × 1,500 m（NVIDIA 稱 DSX POD 鎖定 1 GW 以下部署；再往上電網與熱島都不是篩選模型能處理的）。
   - 基地輸入時退縮 10 m。
@@ -11,12 +11,12 @@
 """
 import math
 
-POD_MW = 7 * 136 / 1000.0                  # 0.952 MW IT 銘牌
+POD_MW = 7 * 230 / 1000.0                  # 1.61 MW IT 銘牌（與 products.py 的 DSX POD it_mw 一致）
 POD_L, POD_W = 12.192, 2.438
 GAP_Y, GAP_X = 3.0, 6.0                    # 長邊並排間距、端牆間距（電力模組東端到下一個 POD）
 SKID_L, SKID_GAP = 6.058, 1.5              # 每個 POD 東端接一個 20 ft 電力模組（power skid），間隔 1.5 m（電纜）
 PITCH_X, PITCH_Y = POD_L + SKID_GAP + SKID_L + GAP_X, POD_W + GAP_Y
-BLOCK_ROWS, BLOCK_COLS = 4, 14            # 標準區塊 4 列（沿 x）× 14 個（沿 y）= 56 POD ≈ 53.3 MW，約 73 × 76 m
+BLOCK_ROWS, BLOCK_COLS = 4, 14            # 標準區塊 4 列（沿 x）× 14 個（沿 y）= 56 POD ≈ 90 MW（DSX POD），約 73 × 76 m
 BLOCK_PODS = BLOCK_ROWS * BLOCK_COLS
 BLOCK_MW = BLOCK_PODS * POD_MW
 ROAD = 12.0

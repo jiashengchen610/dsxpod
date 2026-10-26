@@ -31,7 +31,7 @@ import argparse, math, os
 from pathlib import Path
 from pxr import Usd, UsdGeom, UsdShade, Sdf, Gf, Kind, Vt
 from .variants import (Params, USD_CONTRACT, COOLING, SUPPLY_TEMP, RACKS_PER_POD,
-                       RACK_KW_NAMEPLATE, RACK_KW_LIQUID, RACK_KW_AIR)
+                       RACK_KW_NAMEPLATE, RACK_KW_LIQUID, RACK_KW_AIR, glycol_for)
 from .weather import SITES
 from . import sizing
 from . import products as PRODUCTS_MOD
@@ -80,6 +80,7 @@ ROW_GAP = 6.0                 # 兩列貨櫃端牆間距
 COOLER_GAP_X = 0.6            # 貨櫃頂乾冷卻器之間
 YARD_SETBACK, YARD_GAP_X, YARD_GAP_Y = 8.0, 3.0, 8.0     # remote 設備場
 DRYCOOLER_SPARE = 1           # 每個 POD 多放 1 台備援（N+1）
+STACKED_DUTY = 2              # 疊放散熱模組：2 台運轉 + 1 台備援，容量依 POD 液冷熱選型
 LOOKS = {
     "Rack":           dict(color=(0.10, 0.10, 0.12), roughness=0.55, metallic=0.6),
     "CDU":            dict(color=(0.20, 0.40, 0.80), roughness=0.45, metallic=0.3),
@@ -273,7 +274,13 @@ def add_gb300(prim, facing):
         attr(prim, "aif:spec:maxPowerDcTdp", Sdf.ValueTypeNames.Float, RACK_KW_NAMEPLATE)
         attr(prim, "aif:spec:liquidCooling", Sdf.ValueTypeNames.Float, RACK_KW_LIQUID); attr(prim, "aif:spec:airCooling", Sdf.ValueTypeNames.Float, RACK_KW_AIR)
         note = "aif:* fallback from NVIDIA DSX docs; stand-in for Vera Rubin NVL72"
+    if props:                                          # 規格層是 GB300 的數字；功率覆寫成 Vera Rubin（本地意見蓋過 Reference）
+        attr(prim, "aif:spec:maxPowerDcTdp", Sdf.ValueTypeNames.Float, RACK_KW_NAMEPLATE, "Vera Rubin NVL72 Max-P (Max-Q ~190 kW)")
+        attr(prim, "aif:spec:liquidCooling", Sdf.ValueTypeNames.Float, RACK_KW_LIQUID, "GB300 liquid share 116/136 applied to 230 kW")
+        attr(prim, "aif:spec:airCooling", Sdf.ValueTypeNames.Float, RACK_KW_AIR)
     attr(prim, "aif:core:standInFor", Sdf.ValueTypeNames.String, "NVIDIA Vera Rubin NVL72 (DSX POD: 7 per container)")
+    from .products import PRODUCTS as _P
+    attr(prim, "aif:core:connectsToModelDocumentation", Sdf.ValueTypeNames.String, _P["dsx_pod"]["skus"]["vera_rubin_nvl72"]["url"], "official spec page")
     proxy = GB300 / "proxy" / "proxy_GB300.usd"
     add_full_geometry(prim, proxy, RACK_SIZE, rotate_z=(90.0 if facing > 0 else -90.0), note=note, source="nvidia")
     attr(prim, "layout:facing", Sdf.ValueTypeNames.Token, "+y" if facing > 0 else "-y", "front (air intake / service) side")
@@ -360,15 +367,17 @@ def build_pod(stage, path, origin, looks, heat_rejection, n_coolers):
     if heat_rejection == "stacked":
         cm = UsdGeom.Xform.Define(stage, f"{path}/CoolerModule").GetPrim(); Usd.ModelAPI(cm).SetKind(Kind.Tokens.group)
         attr(cm, "aif:core:assetDescription", Sdf.ValueTypeNames.String,
-             f"container-footprint dry cooler module stacked on the compute container; capacity modelled as {n_coolers} x Vertiv MCV430 (N+1)")
+             f"container-footprint dry cooler module stacked on the compute container; {n_coolers} sections (N+1) rated to the POD's liquid heat, "
+             "fan power scaled from Vertiv MCV430 per kW")
         if COOLER_ASSET.exists():
             vis = UsdGeom.Xform.Define(stage, f"{path}/CoolerModule/Enclosure"); vis.AddTranslateOp().Set(Gf.Vec3d(0, 0, H))
             vis.GetPrim().GetReferences().AddReference(rel(COOLER_ASSET), "/DSXPOD_CoolerModule")
             Usd.ModelAPI(vis.GetPrim()).SetKind(Kind.Tokens.subcomponent); vis.GetPrim().SetInstanceable(True)
         sx = EQUIP["DryCooler"]["size"][0]; span = n_coolers * sx + (n_coolers - 1) * COOLER_GAP_X; x0 = (L - span) / 2
         for k in range(n_coolers):
-            make_drycooler(stage, f"{path}/CoolerModule/DryCooler_{k+1:02d}", (x0 + k * (sx + COOLER_GAP_X), (W - EQUIP['DryCooler']['size'][1]) / 2, H), looks, "stacked",
-                           enclosed=COOLER_ASSET.exists())
+            d = make_drycooler(stage, f"{path}/CoolerModule/DryCooler_{k+1:02d}", (x0 + k * (sx + COOLER_GAP_X), (W - EQUIP['DryCooler']['size'][1]) / 2, H), looks, "stacked",
+                               enclosed=COOLER_ASSET.exists())
+            rate_stacked_cooler(d.GetPrim() if hasattr(d, "GetPrim") else d, n_coolers)
     add_power_skid(stage, path, looks, L, W, RACKS_PER_POD * RACK_KW_NAMEPLATE, dc=True)
     return pp
 
@@ -436,6 +445,7 @@ def build_gadu_unit(stage, path, origin, looks, sk, sku_key):
             kw = float(sk["rack_kw"]) if kind == "rack" else float(sk["net_rack_kw"])
             attr(r, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Compute rack" if kind == "rack" else "Network / management rack")
             attr(r, "aif:core:modelNumber", Sdf.ValueTypeNames.String, sk["name"] if kind == "rack" else "Network / management (GADU)")
+            if kind == "rack": attr(r, "aif:core:connectsToModelDocumentation", Sdf.ValueTypeNames.String, sk["url"], "official spec page")
             attr(r, "aif:core:width", Sdf.ValueTypeNames.Float, 600.0); attr(r, "aif:core:depth", Sdf.ValueTypeNames.Float, 1200.0)
             attr(r, "aif:core:installationClearance", Sdf.ValueTypeNames.Float, 1200.0); attr(r, "aif:core:accessibilityRequirement", Sdf.ValueTypeNames.Float, 900.0)
             attr(r, "aif:spec:maxPowerDcTdp", Sdf.ValueTypeNames.Float, kw, "from GIGABYTE GADU spec table: (IT MW - network racks x 15 kW) / compute racks")
@@ -486,6 +496,22 @@ def build_gadu_unit(stage, path, origin, looks, sk, sku_key):
             UsdGeom.Imageable(g).CreatePurposeAttr(UsdGeom.Tokens.proxy)
     add_power_skid(stage, path, looks, L, W, sk["it_mw"] * 1000.0, dc=False)
     return pp
+
+
+def rate_stacked_cooler(prim, n_sections):
+    """疊放散熱模組（使用者 2026-10-26 選方案 1）：台數固定（N+1），每台容量 = POD 液冷熱 / (台數 − 1)，取 10 kW 整數；
+    風扇功率依 Vertiv MCV430 的每 kW 風扇電等比例放大（每 kW 風扇耗電不變，DSX 與 GADU 公平）。佔地不變（就是貨櫃頂）。"""
+    need = RACKS_PER_POD * RACK_KW_LIQUID / max(1, n_sections - 1)
+    cap = math.ceil(need / 10.0) * 10.0
+    base_cap = prim.GetAttribute("aif:spec:maximumCoolingCapacity").Get() if prim.GetAttribute("aif:spec:maximumCoolingCapacity") else None
+    base_cap = base_cap or (prim.GetAttribute("aif:spec:nominalCoolingCapacity").Get() if prim.GetAttribute("aif:spec:nominalCoolingCapacity") else None) or EQUIP["DryCooler"]["capacity_kw"]
+    fan = prim.GetAttribute("aif:spec:fanPowerKw").Get() if prim.GetAttribute("aif:spec:fanPowerKw") else None
+    if not fan:                                        # Vertiv 層只有電氣規格：同 stage_io 的算法 √3 × V × FLA × 0.9
+        fla, volt = prim.GetAttribute("aif:spec:fullLoadAmpereOfCondenser"), prim.GetAttribute("aif:spec:electricalNominalVoltage")
+        if fla and volt and fla.Get() and volt.Get(): fan = 3 ** 0.5 * float(volt.Get()) * float(fla.Get()) * 0.9 / 1000.0
+    attr(prim, "aif:spec:maximumCoolingCapacity", Sdf.ValueTypeNames.Float, cap, f"section rated to POD liquid heat / {n_sections - 1} (N+1); base unit Vertiv MCV430 {float(base_cap):g} kW")
+    attr(prim, "aif:spec:nominalCoolingCapacity", Sdf.ValueTypeNames.Float, cap)
+    if fan: attr(prim, "aif:spec:fanPowerKw", Sdf.ValueTypeNames.Float, float(fan) * cap / float(base_cap), "MCV430 fan power per kW x section rating")
 
 
 def make_drycooler(stage, path, pos, looks, placement, enclosed=False):
@@ -554,12 +580,19 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
             attr(site, "aif:site:climate", Sdf.ValueTypeNames.String, s["climate"])
             attr(site, "aif:site:weatherSource", Sdf.ValueTypeNames.String, "Open-Meteo ERA5 hourly 2005-2024")
             attr(site, "aif:site:tMax20yC", Sdf.ValueTypeNames.Double, s["t_max_c"], "max hourly dry-bulb 2005-2024 (C); sizes the DSX trim chiller in the capex model")
+            attr(site, "aif:site:electricityUsdPerKwh", Sdf.ValueTypeNames.Double, s["elec_usd_kwh"], f"regional industrial average, not a contract price -- {s['elec_src']} (confidence: {s['elec_conf']})")
+            gp, gf, ga = glycol_for(s["t_design_min_c"])
+            attr(site, "aif:site:tDesignMinC", Sdf.ValueTypeNames.Double, s["t_design_min_c"], "99.6% heating design dry-bulb 2005-2024 (C)")
+            attr(site, "thermal:coolantGlycolPct", Sdf.ValueTypeNames.Double, float(gp), "propylene glycol % so freeze point <= design min - 5 K (outdoor coils at standby)")
+            attr(site, "thermal:glycolPumpFactor", Sdf.ValueTypeNames.Double, gf, "pump energy vs 25% PG baseline")
+            attr(site, "thermal:glycolApproachAddK", Sdf.ValueTypeNames.Double, ga, "dry cooler approach increase vs 25% PG baseline (K)")
     svs.SetVariantSelection(site_key)
 
     plant = UsdGeom.Xform.Define(stage, PLANT).GetPrim(); Usd.ModelAPI(plant).SetKind(Kind.Tokens.assembly)
     b0 = layout["blocks"][0]; PL, PW = round(b0["length"], 2), round(b0["width"], 2)
     looks = make_looks(stage)
     attr(plant, "aif:core:product", Sdf.ValueTypeNames.String, product, "dsx_pod | gadu (dsxpod/products.py)")
+    attr(plant, "aif:core:connectsToModelDocumentation", Sdf.ValueTypeNames.String, pr["url"], "official product page")
     attr(plant, "aif:spec:sku", Sdf.ValueTypeNames.String, sku); attr(plant, "aif:spec:skuName", Sdf.ValueTypeNames.String, sk["name"])
     attr(plant, "aif:spec:coolingMode", Sdf.ValueTypeNames.String, pr["cooling_mode"], "warm_water_dry (DSX POD) | chilled_water (GADU)")
     from .capex import COEF                                   # 造價係數（設備與材料，美元；不含土地與施工人力）：數字在 USD，匯出時讀回再算
@@ -576,7 +609,7 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
              f"{n_pods} DSX POD container(s) x {RACKS_PER_POD} racks, warm-water liquid cooling, dry coolers {heat_rejection}; array {PL} x {PW} m")
     attr(plant, "aif:spec:podCount", Sdf.ValueTypeNames.Int, n_pods); attr(plant, "aif:spec:rackCount", Sdf.ValueTypeNames.Int, n_pods * int(sk["racks_total"]))
     attr(plant, "aif:spec:itUtilization", Sdf.ValueTypeNames.Double, utilization, "mean IT utilisation (0-1)")
-    attr(plant, "aif:spec:coolantMixture", Sdf.ValueTypeNames.String, "75% water / 25% propylene glycol")
+    attr(plant, "aif:spec:coolantMixture", Sdf.ValueTypeNames.String, "water / propylene glycol; 25% baseline, site variant thermal:coolantGlycolPct governs")
     attr(plant, "aif:spec:heatRejectionPlacement", Sdf.ValueTypeNames.String, heat_rejection if product == "dsx_pod" else "ground_chillers")
     attr(plant, "thermal:distributionLossFraction", Sdf.ValueTypeNames.Float, 0.005, "downstream distribution losses as fraction of IT (added to UPS loss)")
     attr(plant, "layout:mode", Sdf.ValueTypeNames.Token, layout["mode"], "detail = this stage is the whole site; campus = this stage is one representative block of campus.usda")
@@ -587,7 +620,8 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     attr(plant, "layout:siteSizeM", Sdf.ValueTypeNames.Float2, Gf.Vec2f(*layout["site_m"]))
 
     q_pod = RACKS_PER_POD * RACK_KW_LIQUID * utilization
-    n_cool = math.ceil(q_pod / EQUIP["DryCooler"]["capacity_kw"]) + DRYCOOLER_SPARE
+    # 疊放：固定 2 + 1 台、依 POD 功率選型（rate_stacked_cooler）；遠端冷卻場（研究用變體）：照 MCV430 容量算台數
+    n_cool = (STACKED_DUTY + DRYCOOLER_SPARE) if heat_rejection == "stacked" else math.ceil(q_pod / EQUIP["DryCooler"]["capacity_kw"]) + DRYCOOLER_SPARE
     ox, oy = b0["x"], b0["y"]
     for i, pd in enumerate(blk0, 1):
         if product == "gadu": build_gadu_unit(stage, f"{PLANT}/POD_{i:02d}", (pd["x"] - ox, pd["y"] - oy), looks, sk, sku)

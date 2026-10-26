@@ -4,7 +4,9 @@
 
 **Live demo: https://dsxpod.vercel.app/** (desktop and mobile)
 
+![Desktop: site view with the dashboard and scenario comparison](docs/screenshots/desktop.png)
 
+<p align="center"><img src="docs/screenshots/mobile.png" width="300" alt="Mobile layout: one-line dashboard on top, settings sheet at the bottom"></p>
 
 ## What it does
 

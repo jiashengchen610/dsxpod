@@ -1,4 +1,4 @@
-// 環境動態疊層：散熱熱氣與閃燈用 DOM + CSS 動畫畫在 3D 畫布上方。
+// 環境動態疊層：散熱熱氣（粒子：預先畫好的柔邊光點，只動 transform / opacity）與閃燈用 DOM + CSS 動畫畫在 3D 畫布上方。
 // WebGL 維持按需渲染（畫面不動就不重畫）；只有鏡頭移動、真的重畫那一幀才重新投影錨點，
 // 閃爍與上升動畫本身只動 transform / opacity，由瀏覽器合成器跑，不佔主執行緒也不喚醒 WebGL。
 // 限制：DOM 不會被 3D 物件遮住，所以只畫最近的 N 個、正面朝外的燈只在看得到那一面時顯示。
@@ -25,7 +25,7 @@ export class FxLayer {
 
   _make(kind) {
     const w = document.createElement('div'); w.className = 'fx-' + kind;
-    w.innerHTML = kind === 'heat' ? '<i></i><i></i><i></i>' : '<i></i>';
+    w.innerHTML = kind === 'heat' ? '<i></i><i></i><i></i><i></i><i></i>' : '<i></i>';   // 熱氣：5 顆粒子
     this.el.appendChild(w); return w;
   }
   _release(key) {

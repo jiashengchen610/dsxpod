@@ -37,11 +37,11 @@ const flat = (mat, layer) => Object.assign(mat, { polygonOffset: true, polygonOf
 // 六個場址的地景（依柯本氣候：Cfa 桃園、Af 柔佛、BWh 鳳凰城、Cfa 達拉斯、Cfb 都柏林、Dfb 奧斯陸）
 export const ENV = {
   taoyuan: { label: '亞熱帶濕潤（Cfa）：水田、竹林與闊葉樹', ground: ['#5f7c3b', '#6f8d45', '#4e6a31', '#7f8c55'], veg: 'broad', density: 0.9, hill: '#4f6b45', hillH: 1.0, turbidity: 8, rayleigh: 2.2, fog: '#c3cdd0', paddy: true },
-  johor:   { label: '熱帶雨林（Af）：油棕園與草地', ground: ['#4c7438', '#587f40', '#41682f', '#6a8448'], veg: 'palm', density: 1.4, hill: '#355f30', hillH: 0.7, turbidity: 10, rayleigh: 2.6, fog: '#c9d5d3' },
+  johor:   { label: '熱帶雨林（Af）：油棕園與草地', ground: ['#2f5a24', '#3a6a2c', '#27501e', '#44703a'], veg: 'palm', density: 1.4, hill: '#22472a', hillH: 0.7, turbidity: 10, rayleigh: 2.6, fog: '#c9d5d3' },
   phoenix: { label: '熱沙漠（BWh）：礫石地、灌木與仙人掌', ground: ['#c8a376', '#b99368', '#d6b68d', '#a7855f'], veg: 'desert', density: 0.7, hill: '#9c6c4c', hillH: 2.4, turbidity: 3, rayleigh: 1.0, fog: '#e2d3ba' },
   dallas:  { label: '濕潤亞熱帶草原（Cfa）：牧草地與零星橡樹', ground: ['#8d9455', '#7f8949', '#a19f63', '#77834a'], veg: 'broad', density: 0.3, hill: null, hillH: 0, turbidity: 5, rayleigh: 1.6, fog: '#d3d7cf' },
   dublin:  { label: '溫帶海洋性（Cfb）：牧場與樹籬', ground: ['#557f3f', '#618b48', '#4b7338', '#6d9150'], veg: 'hedge', density: 0.6, hill: '#4c7a3e', hillH: 0.6, turbidity: 7, rayleigh: 3.0, fog: '#c7ced4' },
-  oslo:    { snow: 0.3, label: '冷溫帶大陸性（Dfb）：針葉林與林間空地', ground: ['#5d6c46', '#6b7a52', '#4e5d3c', '#7b805d'], veg: 'conifer', density: 1.7, hill: '#34472f', hillH: 1.3, turbidity: 4, rayleigh: 1.8, fog: '#cad2d7' },
+  oslo:    { snowCover: 0.8, label: '冷溫帶大陸性（Dfb）：針葉林與林間空地', ground: ['#5d6c46', '#6b7a52', '#4e5d3c', '#7b805d'], veg: 'conifer', density: 1.7, hill: '#34472f', hillH: 1.3, turbidity: 4, rayleigh: 1.8, fog: '#cad2d7' },
 };
 
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -563,9 +563,11 @@ export class PodScene {
     // 環境光：用同一個天空烘 PMREM（只有高畫質需要；省電畫質等切回高畫質再烘）
     this.envDirty = true; if (this.quality === 'high') this._bakeEnv(); else this.scene.environment = null;
     const fog = new THREE.Color(e.fog); this.scene.fog.color.copy(fog); this.scene.background = fog;
-    this.hemi.color.set(e.fog); this.hemi.groundColor.set(e.ground[0]);
+    const SNOWC = new THREE.Color(0xf2f4f6);                         // 雪地覆蓋：地面色整體往白混 snowCover（奧斯陸 80%）
+    this.groundCols = e.snowCover ? e.ground.map(h => '#' + new THREE.Color(h).lerp(SNOWC, e.snowCover).getHexString()) : e.ground;
+    this.hemi.color.set(e.fog); this.hemi.groundColor.set(this.groundCols[0]);
     this.sun.color.set(this.lat > 45 ? 0xffe9d0 : 0xfff6ea);
-    const gt = noiseTex(e.ground, { seed: 11, rows: e.paddy ? 8 : 0, snow: e.snow || 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
+    const gt = noiseTex(this.groundCols, { seed: 11, rows: e.paddy ? 8 : 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
     this.groundTex?.dispose(); this.groundTex = gt; this._groundLook();
     if (rebuild && this.layout) { this._placeSun(); this._roads(this.layout); this._buildSurroundings(); }
     this.dirty = true;
@@ -576,8 +578,9 @@ export class PodScene {
     if (!this.env) return;
     const lite = this.quality === 'lite', g = this.groundMat;
     g.map = lite ? null : this.groundTex; g.vertexColors = !lite;
-    if (lite) { const c = new THREE.Color(0, 0, 0); this.env.ground.forEach(h => c.add(new THREE.Color(h))); g.color.copy(c.multiplyScalar(1 / this.env.ground.length));
-      if (this.env.snow) g.color.lerp(new THREE.Color(0xdfe4e8), this.env.snow * 0.35); } else g.color.set(0xffffff);   // 殘雪：純色地面偏白
+    if (lite) { const cols = this.groundCols || this.env.ground, c = new THREE.Color(0, 0, 0); cols.forEach(h => c.add(new THREE.Color(h))); g.color.copy(c.multiplyScalar(1 / cols.length)); }
+    else g.color.set(0xffffff);
+    g.emissive.set(lite && this.env.snowCover ? 0x5c6066 : 0x000000);   // 輕量沒有天空光，暖色陽光經色調映射會把雪地壓成米灰：補一點自發光
     g.needsUpdate = true; this.dirty = true;
   }
 
@@ -614,7 +617,7 @@ export class PodScene {
     const lists = {};                                                // kind → [x, z, scale, rotY, colorHex]
     const onRoad = (x, z, m = 0) => Math.abs(z - PUB_Z) < PUB_W / 2 + 6 + m || (Math.abs(x - this.gateX) < GATE + 4 && z > z0 - 2 && z < PUB_Z);   // 公路走廊、大門不種樹
     const add = (kind, x, z, s, col) => { if (!onRoad(x, z)) (lists[kind] ||= []).push([x, z, s, r() * Math.PI * 2, col]); };
-    const leafCols = { broad: ['#4f6e2f', '#5b7a36', '#456528', '#6a843d'], palm: ['#4f7a2a', '#5e8a32', '#43701f'], conifer: ['#2f4a2a', '#36522f', '#294226', '#3d5a33'],
+    const leafCols = { broad: ['#4f6e2f', '#5b7a36', '#456528', '#6a843d'], palm: ['#2f5e1c', '#3a6b22', '#285214'], conifer: ['#2f4a2a', '#36522f', '#294226', '#3d5a33'],
                        shrub: ['#7d7a4a', '#6f7044', '#8a8455'], hedge: ['#3f6a2c', '#4a7433'], bamboo: ['#6f9442', '#7fa24c'] };
     const pick = (k) => { const a = leafCols[k] || leafCols.broad, j = Math.floor(r() * a.length); return this.quality === 'lite' ? a[0] : a[j]; };   // 輕量：同種樹同一色
     // 1) 圍籬外的行道樹 / 防風林
@@ -673,7 +676,7 @@ export class PodScene {
         for (const part of kinds[kind]) {
           const m = new THREE.InstancedMesh(part.geo, part.mat, arr.length);
           arr.forEach(([x, z, s, ry, col], i) => { Q.setFromAxisAngle(Y, ry); M.compose(P.set(x, 0, z), Q, S.setScalar(s)); m.setMatrixAt(i, M);
-            if (part.tint) { C.set(col || '#5b7a36'); if (e.snow) C.lerp(SNOW, e.snow * (0.1 + 0.5 * ((i * 37) % 10) / 10)); m.setColorAt(i, C); } });   // 殘雪：樹冠混白
+            if (part.tint) { C.set(col || '#5b7a36'); if (e.snowCover) C.lerp(SNOW, 0.1 + 0.15 * ((i * 37) % 10) / 10); m.setColorAt(i, C); } });   // 殘雪：樹冠混白
           m.castShadow = isNear && span < 700; m.receiveShadow = false; this.surround.add(m);
         }
       }
@@ -698,7 +701,7 @@ export class PodScene {
       for (let i = 0; i < n; i++) {
         const a = i / n * Math.PI * 2 + hr() * 0.15, d = dist * (1 + hr() * 0.6), rad = 260 + hr() * 420;
         M.compose(P.set(cx + Math.cos(a) * d, -2, cz + Math.sin(a) * d), Q.setFromAxisAngle(Y, hr() * 6), S.set(rad * 1.4, rad * 0.22 * e.hillH * (0.6 + hr() * 0.8), rad * (1.0 + hr() * 0.5)));
-        m.setMatrixAt(i, M); m.setColorAt(i, C.set(e.hill).offsetHSL(0, 0, (hr() - .5) * 0.06));
+        m.setMatrixAt(i, M); m.setColorAt(i, C.set(e.hill).lerp(new THREE.Color(0xe6eaee), (e.snowCover || 0) * 0.6).offsetHSL(0, 0, (hr() - .5) * 0.06));   // 雪地：遠山也偏白
       }
       this.surround.add(m);
     }
@@ -819,6 +822,10 @@ export class PodScene {
   }
 
   frame() { this.setView(this.viewMode || 'size', { animate: false }); }
+
+  // 櫃門：鏡頭不動，只開關剖面（打開 = 南牆拿掉看內部）
+  setDoors(open) { this._unit(open); this.dirty = true; }
+  get doorsOpen() { return !!this.cut; }
 
   // ---------------------------------------------------------------- 剖面：一個貨櫃打開南牆，畫內部設備
   _hidePod(i) {

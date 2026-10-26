@@ -33,6 +33,7 @@
     <button class="tab active" data-tab="site" role="tab" data-i18n="nav.site">① 氣候</button>
     <button class="tab" data-tab="unit" role="tab" data-i18n="nav.unit">② 單元</button>
     <button class="tab" data-tab="size" role="tab" data-i18n="nav.size">③ 規模</button>
+    <button class="gear" id="prefsBtn" title="顯示設定：畫質、動態、語言" aria-label="顯示設定" data-i18n-title="prefs.t" data-i18n-aria="prefs.title" aria-expanded="false" aria-controls="prefs">⚙</button>
     <button class="collapse" id="navCollapse" title="縮小設定面板" aria-label="縮小設定面板" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse">‹</button>
   </div>
   <section class="tabpane active" data-pane="site">
@@ -45,6 +46,7 @@
       <span class="lbl" data-i18n="product.label">產品</span>
       <div class="seg mini" id="productSeg"><button data-p="dsx_pod" class="on">NVIDIA DSX POD</button><button data-p="gadu">GIGABYTE GADU</button></div>
       <select id="skuSel" class="sku" hidden aria-label="GADU SKU"></select>
+      <a id="productLink" class="ext" target="_blank" rel="noopener" data-i18n="link.product">產品頁 ↗</a>
     </div>
     <label class="field" data-i18n="unit.coolLabel">散熱（依氣候與規模自動決定）</label>
     <div class="reco" id="coolAuto"></div>
@@ -59,13 +61,19 @@
   </section>
   <section class="tabpane" data-pane="size">
     <div class="seg" id="sizeMode">
-      <button class="on" data-mode="site" data-i18n="size.site">基地範圍</button><button data-mode="mw" data-i18n="size.mw">總電量</button>
+      <button class="on" data-mode="site" data-i18n="size.site">基地範圍</button><button data-mode="mw" data-i18n="size.mw">總電量</button><button data-mode="units" data-i18n="size.units.mode">貨櫃數量</button>
     </div>
     <div id="sizeMW">
       <label class="field"><span data-i18n="size.itmw">IT 銘牌容量</span> <output id="mwOut">10 MW</output></label>
       <input type="range" id="mwRange" min="0" max="1000" step="1" value="333">
       <div class="ticks"><span>1</span><span>10</span><span>100</span><span>1000 MW</span></div>
       <label class="field small"><span data-i18n="size.exact">精確輸入</span> <span class="nw"><input type="number" id="mwInput" min="0.5" max="1000" step="0.5" value="10"> MW</span></label>
+    </div>
+    <!-- 貨櫃數量：使用者給單元數 → 反推 IT 功率與占地（換算成 數量 × 每單元 MW 走同一條規模換算） -->
+    <div id="sizeUnits" hidden>
+      <label class="field"><span data-i18n="size.units.label">貨櫃（單元）數量</span> <output id="unOut">6</output></label>
+      <input type="range" id="unRange" min="1" max="600" step="1" value="6">
+      <label class="field small"><span data-i18n="size.exact">精確輸入</span> <span class="nw"><input type="number" id="unInput" min="1" max="2000" step="1" value="6"> <span data-i18n="size.units.unit">個</span></span></label>
     </div>
     <div id="sizeSite" hidden>
       <label class="field"><span data-i18n="size.len">基地長</span> <output id="slOut">120 m</output></label>
@@ -78,53 +86,66 @@
   </section>
 </nav>
 
-<!-- 右：常駐儀表板（總算力 + 電力 / 用水 / 土地 / 造價的總量與每 EF）＋ 細節（摘要 / 能耗 / 比較 / 氣候）收合 -->
+<!-- 右：一行總覽（永遠看得到）＋ 分頁（總覽 / 摘要 / 能耗 / 氣候），桌機手機同結構。桌機可加寬到約 90%。
+     方案比較是「購物車」：＋ 加入比較 → 比較（n）開全畫面大表（#cmpModal） -->
 <aside class="data panel" id="data" aria-label="結果" data-i18n-aria="data.aria">
   <div class="sheet-head" id="sheetHead" role="button" aria-label="展開報告" data-i18n-aria="sheet.open">
     <div class="kstrip" id="kpiStrip"></div>
+    <div class="head-btns"><button class="wide" id="dataWide" data-i18n="data.wide.btn" data-i18n-title="data.wide" title="加寬到全畫面檢視">‹ 全畫面檢視</button><button class="collapse" id="dataCollapse" title="縮小報告面板" aria-label="縮小報告面板" data-i18n-title="data.collapse" data-i18n-aria="data.collapse">›</button></div>
   </div>
-  <div class="dash-head"><span data-i18n="dash.title">儀表板</span>
-    <button class="collapse" id="dataCollapse" title="縮小報告面板" aria-label="縮小報告面板" data-i18n-title="data.collapse" data-i18n-aria="data.collapse">›</button>
-  </div>
-  <div class="dash" id="dash"></div>
-  <div class="dash-status" id="dashStatus"></div>
-  <button class="more-btn" id="moreBtn" aria-expanded="false" aria-controls="more"><span data-i18n="dash.more">細節</span></button>
-  <div class="more" id="more">
   <div class="tabs" role="tablist">
-    <button class="tab" data-tab="dash" data-i18n="tab.dash">總覽</button>
-    <button class="tab active" data-tab="sum" data-i18n="tab.sum">摘要</button>
+    <button class="tab active" data-tab="dash" data-i18n="tab.dash">總覽</button>
+    <button class="tab" data-tab="sum" data-i18n="tab.sum">摘要</button>
     <button class="tab" data-tab="energy" data-i18n="tab.energy">能耗</button>
-    <button class="tab" data-tab="cmp" data-i18n="tab.cmp">比較</button>
     <button class="tab" data-tab="clim" data-i18n="tab.clim">氣候</button>
   </div>
-  <section class="tabpane active" data-pane="sum"><div class="kpis" id="kpis"></div><div class="notes" id="sumNotes"></div></section>
+  <section class="tabpane active" data-pane="dash"><div class="dash" id="dash"></div><div class="dash-status" id="dashStatus"></div></section>
+  <section class="tabpane" data-pane="sum"><div class="kpis" id="kpis"></div><div class="notes" id="sumNotes"></div></section>
   <section class="tabpane" data-pane="energy">
     <div class="chart mid"><canvas id="yearChart"></canvas></div><p class="hint" data-i18n="energy.year.hint">每年 PUE（2005–2024）。年際差遠小於場址與散熱策略的差。</p>
     <div class="chart mid"><canvas id="mixChart"></canvas></div><p class="hint" data-i18n="energy.mix.hint">一年的設施耗電組成（不含 IT）。</p>
+    <h4 class="sub" data-i18n="cmp.cool.title">散熱方式比較</h4><div id="cmpTable"></div><p class="hint" data-i18n="cmp.hint">純乾冷卻器與加輔助冰水機的比較（同場址、同規模、45 °C 供水）。系統選 20 年內 0 小時排不掉熱、且設備最少的方案（★）。</p>
   </section>
-  <section class="tabpane" data-pane="cmp"><div id="cmpTable"></div><p class="hint" data-i18n="cmp.hint">純乾冷卻器與加輔助冰水機的比較（同場址、同規模、45 °C 供水）。系統選 20 年內 0 小時排不掉熱、且設備最少的方案（★）。</p></section>
   <section class="tabpane" data-pane="clim"><div class="chart short"><canvas id="climT"></canvas></div><div class="chart short"><canvas id="climP"></canvas></div><div id="climFacts" class="facts-grid"></div></section>
-  </div>
   <footer class="export">
-    <button id="exportBtn" class="primary" data-i18n="export.btn" data-i18n-title="export.t">匯出 USD 與參數（zip）</button>
+    <div class="cta-row"><button id="exportBtn" class="primary" data-i18n="export.btn" data-i18n-title="export.t">匯出 USD 與參數（zip）</button><button id="saveScn" class="secondary" data-i18n="scn.save" data-i18n-title="scn.save.t">＋ 加入比較</button></div>
+    <div class="cart"><div class="scn-chips" id="scnChips"></div><button id="openCmp" class="cmp-open" hidden><span data-i18n="scn.open">比較</span> <b id="cartN">0</b></button></div>
     <div class="hint" id="exportHint"></div>
   </footer>
   <div class="data-grab" id="dataGrab" role="button" aria-label="展開報告" data-i18n-aria="sheet.open"></div>
 </aside>
+<!-- 方案比較：全畫面大表 -->
+<div class="modal" id="cmpModal" hidden role="dialog" aria-modal="true" aria-labelledby="cmpTitle">
+  <div class="modal-box">
+    <header><h3 id="cmpTitle" data-i18n="cmp.modal.title">方案比較</h3><button id="shareBtn" class="secondary" data-i18n="scn.share">分享連結</button><button class="close" id="cmpClose" aria-label="關閉" data-i18n-aria="close">×</button></header>
+    <div class="modal-body"><div id="scnTable"></div><p class="hint" id="scnHint"></p></div>
+  </div>
+</div>
 
 <!-- 左下工具列：收起兩側（F）、畫質、語言。手機版由 app.js 移進設定面板底部 -->
+<!-- 左下：收起兩側（F）。畫質 / 動態 / 語言收在齒輪（#prefs） -->
 <div class="toolbar panel" id="toolbar">
   <button class="fs" id="fsBtn" title="收起 / 展開兩側面板（F）" data-i18n-title="fs.t">⇔ 收起兩側</button>
   <span class="sep"></span>
-  <span data-i18n="quality">畫質</span>
-  <div class="seg mini" id="qualitySeg"><button data-q="high" data-i18n="quality.high" data-i18n-title="quality.high.hint">高</button><button data-q="lite" data-i18n="quality.lite" data-i18n-title="quality.lite.hint">輕量</button></div>
-  <span class="sep"></span>
-  <span data-i18n="anim">動態</span>
-  <div class="seg mini" id="animSeg"><button data-a="on" data-i18n="anim.on" data-i18n-title="anim.t">開</button><button data-a="off" data-i18n="anim.off" data-i18n-title="anim.t">關</button></div>
-  <span class="sep"></span>
-  <div class="seg mini" id="langSeg" aria-label="語言" data-i18n-aria="lang"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
-  <span class="hint toast" id="qualityHint" hidden></span>
+  <button class="fs" id="homeBtn" title="關閉剖面，回到透視視角（H）" data-i18n="home.btn" data-i18n-title="home.t">⌂ 重設視角</button>
 </div>
+<!-- 櫃門開關：浮在 3D 上，只在看貨櫃剖面時出現（桌機下方置中、手機左下） -->
+<div class="door-fab panel" id="doorFab" hidden><span data-i18n="door.label">櫃門</span><div class="seg mini" id="doorSeg"><button data-door="open" class="on" data-i18n="door.open">打開</button><button data-door="close" data-i18n="door.close">關閉</button></div></div>
+<!-- 手機：重設視角的浮動按鈕（3D 右下、設定面板上方） -->
+<button class="home-fab panel" id="homeFab" aria-label="重設視角" title="重設視角" data-i18n-aria="home.t" data-i18n-title="home.t">⌂</button>
+<!-- 齒輪設定：桌機、手機共用的彈出面板 -->
+<div class="prefs panel" id="prefs" hidden role="dialog" aria-label="顯示設定" data-i18n-aria="prefs.title">
+  <div class="row"><span data-i18n="quality">畫質</span>
+    <div class="seg mini" id="qualitySeg"><button data-q="high" data-i18n="quality.high" data-i18n-title="quality.high.hint">高</button><button data-q="lite" data-i18n="quality.lite" data-i18n-title="quality.lite.hint">輕量</button></div>
+  </div>
+  <div class="row"><span data-i18n="anim">動態</span>
+    <div class="seg mini" id="animSeg"><button data-a="on" data-i18n="anim.on" data-i18n-title="anim.t">開</button><button data-a="off" data-i18n="anim.off" data-i18n-title="anim.t">關</button></div>
+  </div>
+  <div class="row"><span data-i18n="lang">語言</span>
+    <div class="seg mini" id="langSeg" aria-label="語言" data-i18n-aria="lang"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
+  </div>
+</div>
+<div class="toast-float panel" id="qualityHint" hidden></div>
 <!-- 面板縮小後留下的小標籤，點了叫回來 -->
 <button class="tag panel" id="navTag" title="展開設定" data-i18n-title="tag.nav.t"><span data-i18n="tag.nav">⚙ 設定 ›</span></button>
 <button class="tag panel" id="dataTag" title="展開報告" data-i18n-title="tag.data.t"><span data-i18n="tag.data">‹ 報告</span><span id="dataTagKpi"></span></button>

@@ -11,9 +11,12 @@ usd_out.build() 用它把預設值寫進 USD，stage_io.stage_to_params() 用它
 """
 from dataclasses import dataclass, field, asdict
 
-RACK_KW_NAMEPLATE = 136.0        # NVIDIA GB300 NVL72（DSX 內容包 aif:spec:maxPowerDcTdp）
-RACK_KW_LIQUID = 116.0           # 液冷份額（aif:spec:liquidCooling）
-RACK_KW_AIR = 19.3               # 氣冷份額（aif:spec:airCooling）
+# Vera Rubin NVL72 每櫃 230 kW（Max-P；Max-Q 約 190 kW，硬體相同。來源：CES 2026 / 郭明錤整理、技嘉 VR NVL72 頁最高 240 kW）。
+# 使用者 2026-10-26：DSX POD 與 GADU 的 Vera Rubin 統一用 230 kW（之前 DSX 用 GB300 136 kW 代理、GADU 由規格表換算約 261 kW，不公平）。
+# 液冷 / 氣冷份額沿用 GB300 官方比例（116 / 136 = 0.853）。
+RACK_KW_NAMEPLATE = 230.0
+RACK_KW_LIQUID = round(230.0 * 116.0 / 136.0, 1)     # 196.2
+RACK_KW_AIR = round(230.0 * 19.3 / 136.0, 1)         # 32.6
 LIQUID_FRACTION = RACK_KW_LIQUID / RACK_KW_NAMEPLATE   # 0.853
 AIR_FRACTION = RACK_KW_AIR / RACK_KW_NAMEPLATE         # 0.142（剩餘 0.5% 當配電內損）
 RACKS_PER_POD = 7                                      # NVIDIA DSX POD：每個貨櫃 7 架 Vera Rubin NVL72
@@ -30,7 +33,11 @@ class Params:
     tcs_delta_t_k: float = 10.0            # 機櫃進出水溫差（有 GB300 流量曲線時改由 q/ṁcp 算）
     cdu_approach_k: float = 3.0            # CDU 板換接近溫差 → FWS 供水 = 42 °C
     cdu_pump_frac: float = 0.012           # 後備：CDU 泵電 / 液冷熱（有 GB300 曲線時不用）
-    fws_pump_frac: float = 0.010           # 設施側泵電 / 液冷熱
+    fws_pump_frac: float = 0.010           # 設施側泵電 / 液冷熱（25% 丙二醇基準）
+    # ---- 防凍液（依場址；/World/Site 變體寫 thermal:coolantGlycolPct / glycolPumpFactor / glycolApproachAddK）----
+    glycol_pct: float = 25.0
+    glycol_pump_factor: float = 1.0        # 相對 25% 的泵耗電倍率（比熱降、黏度升）
+    glycol_approach_add_k: float = 0.0     # 乾冷卻器接近溫差增量（流體側熱傳變差）
     dry_cooler_approach_k: float = 5.0     # 乾冷卻器接近溫差（冷端：需求 FWS 供水 − 進風）
     dry_cooler_fan_frac_design: float = 0.035   # 設計點風扇電 / 排熱（Vertiv 規格推得時覆寫）
     dry_cooler_fan_floor: float = 0.15     # 風扇電最低 = 設計值的 15%
@@ -193,6 +200,19 @@ CONTRACT_PRODUCTS = {
     "chws_supply_c": {"gadu"}, "chiller_carnot_eff": {"gadu"}, "condenser_approach_k": {"gadu"}, "evaporator_approach_k": {"gadu"},
     "chiller_capacity_margin": {"gadu"}, "chiller_rating_ambient_c": {"gadu"}, "chiller_derate_per_k": {"gadu"}, "chw_pump_frac": {"gadu"}, "inrow_fan_frac": {"gadu"},
 }
+# 丙二醇（PG）水溶液：濃度 → (冰點 °C, 泵耗電倍率, 乾冷卻器接近溫差增量 K)，相對 DSX 基準 25%。
+# 冰點：ASHRAE Handbook Fundamentals（PG 溶液）；泵與接近溫差：45 °C 時比熱與黏度的篩選等級估算（流量 ∝ 1/cp，泵電 ∝ 流量^2.8 × 黏度^0.2）。
+GLYCOL_PG = {25: (-10.0, 1.00, 0.0), 30: (-13.0, 1.06, 0.1), 35: (-17.0, 1.13, 0.2), 40: (-21.0, 1.24, 0.35), 45: (-26.0, 1.40, 0.5), 50: (-32.0, 1.60, 0.7)}
+GLYCOL_MARGIN_K = 5.0
+
+
+def glycol_for(t_design_min_c):
+    """最小濃度使冰點 ≤ 99.6% 低溫 − 5 K（停機、檢修時室外盤管不凍）。運轉中水溫 42–52 °C 不會凍。"""
+    for pct, (fp, pump, appr) in GLYCOL_PG.items():
+        if fp <= t_design_min_c - GLYCOL_MARGIN_K: return pct, pump, appr
+    pct = max(GLYCOL_PG); return (pct, *GLYCOL_PG[pct][1:])
+
+
 USD_CONTRACT = [
     # param,                   prim（相對 POD）,      attr,                                      doc
     ("it_utilization",          ".",                   "aif:spec:itUtilization",                  "mean IT utilisation (0-1)"),

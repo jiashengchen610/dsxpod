@@ -1,6 +1,6 @@
 // 規模換算與區塊佈局（dsxpod/sizing.py 的 JS 版；tests/test_sizing_parity 檢查兩邊輸出一致，改一邊就要改另一邊）
-// 陣列一律補成完整矩形；標準區塊 4 × 14 = 56 POD ≈ 53.3 MW。
-export const POD_MW = 7 * 136 / 1000.0;
+// 陣列一律補成完整矩形；標準區塊 4 × 14 = 56 POD ≈ 90 MW（DSX POD 每個 1.61 MW）。
+export const POD_MW = 7 * 230 / 1000.0;
 export const POD_L = 12.192, POD_W = 2.438;
 export const GAP_Y = 3.0, GAP_X = 6.0;
 export const SKID_L = 6.058, SKID_GAP = 1.5;                       // 每個 POD 東端的 20 ft 電力模組（與 sizing.py 一致）

@@ -20,13 +20,15 @@ except OSError: pass
 
 # 六個示範場址（2026-10-25 定案）
 # t_max_c：2005–2024 逐時最高氣溫（climate_summary.json extremes.t_max），造價模型估輔助冰水機容量用
+# elec_usd_kwh：地區平均工業電價（美元 / kWh，非大用戶合約價；營運成本粗估用），elec_src / elec_conf 為來源與可信度
+# t_design_min_c：99.6% 低溫（ASHRAE 採暖設計乾球，extremes.t_p0_4），決定防凍液濃度
 SITES = {
-    "taoyuan":  dict(name="桃園（台灣）",        lat=25.00, lon=121.30, tz="Asia/Taipei",      climate="亞熱帶濕熱", t_max_c=37.9),
-    "johor":    dict(name="柔佛 Sedenak（馬來西亞）", lat=1.62, lon=103.57, tz="Asia/Kuala_Lumpur", climate="赤道濕熱", t_max_c=36.1),
-    "phoenix":  dict(name="鳳凰城（美國亞利桑那）", lat=33.45, lon=-112.07, tz="America/Phoenix",  climate="沙漠乾熱", t_max_c=47.7),
-    "dallas":   dict(name="達拉斯（美國德州）",   lat=32.78, lon=-96.80, tz="America/Chicago",  climate="濕潤副熱帶、波動大", t_max_c=42.9),
-    "dublin":   dict(name="都柏林（愛爾蘭）",     lat=53.35, lon=-6.26, tz="Europe/Dublin",     climate="溫帶海洋", t_max_c=27.3),
-    "oslo":     dict(name="奧斯陸（挪威）",       lat=59.91, lon=10.75, tz="Europe/Oslo",       climate="寒帶", t_max_c=33.0),
+    "taoyuan":  dict(name="桃園（台灣）",        lat=25.00, lon=121.30, tz="Asia/Taipei",      climate="亞熱帶濕熱", t_max_c=37.9, t_design_min_c=8.1, elec_usd_kwh=0.135, elec_src='Taipower industrial tariff NT$4.27/kWh (frozen 2026)', elec_conf='medium'),
+    "johor":    dict(name="柔佛 Sedenak（馬來西亞）", lat=1.62, lon=103.57, tz="Asia/Kuala_Lumpur", climate="赤道濕熱", t_max_c=36.1, t_design_min_c=21.9, elec_usd_kwh=0.105, elec_src='~USD 105/MWh tracker; TNB E1 industrial from 33.7 sen/kWh', elec_conf='medium'),
+    "phoenix":  dict(name="鳳凰城（美國亞利桑那）", lat=33.45, lon=-112.07, tz="America/Phoenix",  climate="沙漠乾熱", t_max_c=47.7, t_design_min_c=1.4, elec_usd_kwh=0.073, elec_src='EIA Arizona industrial average, 2026 YTD', elec_conf='high'),
+    "dallas":   dict(name="達拉斯（美國德州）",   lat=32.78, lon=-96.80, tz="America/Chicago",  climate="濕潤副熱帶、波動大", t_max_c=42.9, t_design_min_c=-4.6, elec_usd_kwh=0.067, elec_src='EIA Texas industrial average, 2026 YTD', elec_conf='high'),
+    "dublin":   dict(name="都柏林（愛爾蘭）",     lat=53.35, lon=-6.26, tz="Europe/Dublin",     climate="溫帶海洋", t_max_c=27.3, t_design_min_c=-1.1, elec_usd_kwh=0.21, elec_src='Eurostat H2-2025 largest non-household band EUR 0.191/kWh', elec_conf='medium'),
+    "oslo":     dict(name="奧斯陸（挪威）",       lat=59.91, lon=10.75, tz="Europe/Oslo",       climate="寒帶", t_max_c=33.0, t_design_min_c=-17.2, elec_usd_kwh=0.126, elec_src='European industrial price tables (hydro-dominated grid)', elec_conf='medium'),
 }
 HOURLY = ["temperature_2m", "relative_humidity_2m", "dew_point_2m", "wind_speed_10m", "shortwave_radiation", "surface_pressure"]
 

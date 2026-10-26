@@ -132,9 +132,12 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
             pass
         # 造價：係數與場址最高氣溫都從 Stage 讀回（USD 是真相來源），寫進結果層與 results.json
         from .capex import capex as _capex
-        from .stage_io import read_cost_coef, site_t_max, write_capex
+        from .capex import opex as _opex
+        from .stage_io import read_cost_coef, site_t_max, site_elec_price, write_capex
         coef, coef_missing = read_cost_coef(st)
         cx = _capex(layout, product, sku, cooling, rise_k=p.recirculation_k + p.island_dt(3.0), t_max_c=site_t_max(st), c=coef)
+        price = site_elec_price(st)
+        cx.update(_opex(sm["it_mwh_mean"], sm["facility_mwh_mean"], price, cx["total"], c=coef))
         rl = Sdf.Layer.FindOrOpen(str(d / "twin" / "pod_results.usda")); write_capex(st, cx, layer=rl, basis=str(st.GetPrimAtPath("/World/Plant").GetAttribute("cost:basis").Get())); rl.Save()
         st.SetEditTarget(Usd.EditTarget(root)); root.Save()
         inputs = dict(site=site, site_name=SITES[site]["name"], mw=mw, site_l=site_l, site_w=site_w, cooling=cooling, cooling_label=COOLING[cooling]["label"],
@@ -147,7 +150,9 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
                       checks=dict(summary=checks["summary"], violations=checks["violations"], capacity=checks["capacity"]), warnings=layout["warnings"],
                       capex=dict(total_usd=round(cx["total"]), it_usd=round(cx["it"]), facility_usd=round(cx["facility"]), items={k: round(v) for k, v in cx["items"].items()},
                                  basis="racks + equipment + materials; excludes land, construction labor, design fees, contingency; IT at ODM/hyperscale procurement basis",
-                                 coef_from_usd=not coef_missing),
+                                 coef_from_usd=not coef_missing, electricity_usd_per_kwh=price,
+                                 energy_usd_per_year=round(cx["energy_usd_per_year"]), tco_usd_per_year=round(cx["tco_usd_per_year"]),
+                                 tco_basis=f"capex / {coef['depreciation_years']:g} years + electricity (IT + facility) at the site's regional industrial price"),
                       generated=time.strftime("%Y-%m-%d %H:%M"))
         (pkg / "results.json").write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         (pkg / "params.json").write_text(json.dumps(dict(values={k: v for k, v in p.to_dict().items() if k != "notes"}, sources=[n for n in p.notes if "←" in n],
@@ -162,6 +167,7 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
 場址：{SITES[site]['name']}　規模：{layout['n_pods']} 個單位（{layout['it_mw']:g} MW IT 銘牌，{layout['n_blocks']} 區塊）　散熱：{COOLING[cooling]['label']}　供水：{SUPPLY_LABEL[supply]}
 PUE 20 年均 {sm['pue_mean']:.3f}　每年排不掉熱 {sm['unmet_h_mean']:.0f} 小時　冰水機 {sm['chiller_mwh_mean']:,.0f} MWh/年　用水 {sm['water_m3_mean']:,.0f} m³/年
 造價（粗估 ±30–50%）：US$ {cx['total'] / 1e6:,.1f}M（IT {cx['it'] / 1e6:,.1f}M、設施 {cx['facility'] / 1e6:,.1f}M）；含機櫃與地上物設備材料，不含土地、施工人力、設計費與預備金；係數在 /World/Plant cost:coef:*
+營運：電費 US$ {cx['energy_usd_per_year'] / 1e6:,.1f}M／年（{price:g} USD/kWh，地區平均工業電價）；總持有成本 US$ {cx['tco_usd_per_year'] / 1e6:,.1f}M／年（造價 ÷ {coef['depreciation_years']:g} 年 + 電費）
 
 開啟：用 USD Composer 開 {main}（upAxis Z、公尺）。/World/Plant 上有 VariantSet cooling、supply_temp、geometry；/World/Site 有 site。
 幾何：目前 geometry = {geometry}（box = 方塊；vertiv = Vertiv CDU 真實模型；full = 再加 GB300 機櫃低模）。{'這份是輕量包：執行 python fetch_real_geometry.py 下載 Vertiv 模型後，把 geometry 切成 vertiv。' if geometry == 'box' else ''}
