@@ -716,10 +716,11 @@ def build_campus(layout, site_key, cooling, supply, product="dsx_pod"):
         bp = UsdGeom.Xform.Define(st, f"/World/Campus/Block_{b['index']+1:02d}"); bp.AddTranslateOp().Set(Gf.Vec3d(b["x"], b["y"], 0))
         bp.GetPrim().GetReferences().AddReference(rel(OUT), "/World/Plant")
         b0 = layout["blocks"][0]; r0, c0 = b0.get("rows", 4), b0.get("cols", 14); r, c = b.get("rows", r0), b.get("cols", c0)
-        if (r, c) == (r0, c0): bp.GetPrim().SetInstanceable(True)
-        else:                                                   # 部分區塊（基地剩餘空間）：引用代表區塊，把超出的單元設為不啟用，幾何正確
+        if (r, c, b["n_pods"]) == (r0, c0, b0["n_pods"]): bp.GetPrim().SetInstanceable(True)
+        else:                                                   # 部分區塊（基地剩餘 / 最後一塊、最後一列可不滿）：引用代表區塊，把超出的單元設為不啟用，幾何正確
             for q in range(r0 * c0):
-                if q // c0 >= r or q % c0 >= c: st.OverridePrim(f"/World/Campus/Block_{b['index']+1:02d}/POD_{q+1:02d}").SetActive(False)
+                i, j = divmod(q, c0)
+                if i >= r or j >= c or i * c + j >= b["n_pods"]: st.OverridePrim(f"/World/Campus/Block_{b['index']+1:02d}/POD_{q+1:02d}").SetActive(False)
         vs = bp.GetPrim().GetVariantSets(); vs.GetVariantSet("cooling").SetVariantSelection(cooling); vs.GetVariantSet("supply_temp").SetVariantSelection(supply)
         attr(bp.GetPrim(), "aif:spec:blockPodCount", Sdf.ValueTypeNames.Int, int(b["n_pods"]))
         if "substation" in b:

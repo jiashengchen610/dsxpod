@@ -32,16 +32,17 @@ const ACCENT = 0x76b900;
 const subScale = s => Math.max(0.4, Math.min(1, s.l / 40));     // 小陣列：變電站等比縮小（接近箱式變電站的量體）
 // 地面疊層（鋪面、基座、道路、路肩、地界）：幾公分的高差在遠景分不出深度 → 一閃一閃（z-fighting）。
 // 用 polygonOffset 固定上下順序（layer 越大越上面），再配合相機近平面隨距離調整（start() 裡）。
+const HALO_M = 10;                                                // 基地外熱影響帶寬度（m）
 const flat = (mat, layer) => Object.assign(mat, { polygonOffset: true, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer * 4 });
 
 // 六個場址的地景（依柯本氣候：Cfa 桃園、Af 柔佛、BWh 鳳凰城、Cfa 達拉斯、Cfb 都柏林、Dfb 奧斯陸）
 export const ENV = {
-  taoyuan: { label: '亞熱帶濕潤（Cfa）：水田、竹林與闊葉樹', ground: ['#5f7c3b', '#6f8d45', '#4e6a31', '#7f8c55'], veg: 'broad', density: 0.9, hill: '#4f6b45', hillH: 1.0, turbidity: 8, rayleigh: 2.2, fog: '#c3cdd0', paddy: true },
-  johor:   { label: '熱帶雨林（Af）：油棕園與草地', ground: ['#2f5a24', '#3a6a2c', '#27501e', '#44703a'], veg: 'palm', density: 1.4, hill: '#22472a', hillH: 0.7, turbidity: 10, rayleigh: 2.6, fog: '#c9d5d3' },
-  phoenix: { label: '熱沙漠（BWh）：礫石地、灌木與仙人掌', ground: ['#c8a376', '#b99368', '#d6b68d', '#a7855f'], veg: 'desert', density: 0.7, hill: '#9c6c4c', hillH: 2.4, turbidity: 3, rayleigh: 1.0, fog: '#e2d3ba' },
-  dallas:  { label: '濕潤亞熱帶草原（Cfa）：牧草地與零星橡樹', ground: ['#8d9455', '#7f8949', '#a19f63', '#77834a'], veg: 'broad', density: 0.3, hill: null, hillH: 0, turbidity: 5, rayleigh: 1.6, fog: '#d3d7cf' },
-  dublin:  { label: '溫帶海洋性（Cfb）：牧場與樹籬', ground: ['#557f3f', '#618b48', '#4b7338', '#6d9150'], veg: 'hedge', density: 0.6, hill: '#4c7a3e', hillH: 0.6, turbidity: 7, rayleigh: 3.0, fog: '#c7ced4' },
-  oslo:    { snowCover: 0.8, label: '冷溫帶大陸性（Dfb）：針葉林與林間空地', ground: ['#5d6c46', '#6b7a52', '#4e5d3c', '#7b805d'], veg: 'conifer', density: 1.7, hill: '#34472f', hillH: 1.3, turbidity: 4, rayleigh: 1.8, fog: '#cad2d7' },
+  taoyuan: { label: '亞熱帶濕潤（Cfa）：水田、竹林與闊葉樹', ground: ['#5f7c3b', '#6f8d45', '#4e6a31', '#7f8c55'], veg: 'broad', density: 0.9, hill: '#4f6b45', hillH: 1.0, turbidity: 8, rayleigh: 2.2, fog: '#c3cdd0', paddy: true, halo: '#b39a45' },
+  johor:   { label: '熱帶雨林（Af）：油棕園與草地', ground: ['#2f5a24', '#3a6a2c', '#27501e', '#44703a'], veg: 'palm', density: 1.4, hill: '#22472a', hillH: 0.7, turbidity: 10, rayleigh: 2.6, fog: '#c9d5d3', halo: '#a8913a' },
+  phoenix: { label: '熱沙漠（BWh）：礫石地、灌木與仙人掌', ground: ['#c8a376', '#b99368', '#d6b68d', '#a7855f'], veg: 'desert', density: 0.7, hill: '#9c6c4c', hillH: 2.4, turbidity: 3, rayleigh: 1.0, fog: '#e2d3ba', halo: '#dcc493' },
+  dallas:  { label: '濕潤亞熱帶草原（Cfa）：牧草地與零星橡樹', ground: ['#8d9455', '#7f8949', '#a19f63', '#77834a'], veg: 'broad', density: 0.3, hill: null, hillH: 0, turbidity: 5, rayleigh: 1.6, fog: '#d3d7cf', halo: '#c2a550' },
+  dublin:  { label: '溫帶海洋性（Cfb）：牧場與樹籬', ground: ['#557f3f', '#618b48', '#4b7338', '#6d9150'], veg: 'hedge', density: 0.6, hill: '#4c7a3e', hillH: 0.6, turbidity: 7, rayleigh: 3.0, fog: '#c7ced4', halo: '#ad9b47' },
+  oslo:    { snowCover: 0.8, label: '冷溫帶大陸性（Dfb）：針葉林與林間空地', ground: ['#5d6c46', '#6b7a52', '#4e5d3c', '#7b805d'], veg: 'conifer', density: 1.7, hill: '#34472f', hillH: 1.3, turbidity: 4, rayleigh: 1.8, fog: '#cad2d7', halo: '#5e7f3a' },   // halo：基地周圍的熱影響帶（奧斯陸是融雪露出的綠）
 };
 
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -493,6 +494,17 @@ export class PodScene {
     const lite = this.quality === 'lite', t = lite ? null : this.gravelTex.clone(); if (t) { t.needsUpdate = true; t.repeat.set(bx / 24, by / 24); }
     const site = new THREE.Mesh(new THREE.PlaneGeometry(bx, by), flat(new THREE.MeshStandardMaterial(lite ? { color: 0x8c8d87, roughness: 1 } : { map: t, roughness: 1 }), 1));   // 輕量：礫石改純色
     site.rotation.x = -Math.PI / 2; site.position.set(-SETBACK + bx / 2, 0.03, -(-SETBACK + by / 2)); site.receiveShadow = true; this.pads.add(site);
+    // 熱影響帶：基地外約 10 m，排熱讓周圍植被偏黃（奧斯陸則是融雪露出綠意）；內緣 75% 不透明、往外淡出
+    const x0 = -SETBACK, z0 = SETBACK, x1 = x0 + bx, z1 = z0 - by, R = HALO_M;
+    const I = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], O = [[x0 - R, z0 + R], [x1 + R, z0 + R], [x1 + R, z1 - R], [x0 - R, z1 - R]];
+    const pos = [], col = [], idx = [];
+    [...I, ...O].forEach(([x, z], i) => { pos.push(x, 0.02, z); col.push(1, 1, 1, i < 4 ? 0.75 : 0); });
+    for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; idx.push(i, 4 + i, 4 + j, i, 4 + j, j); }
+    const hg = new THREE.BufferGeometry(); hg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); hg.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+    hg.setIndex(idx); hg.computeVertexNormals();
+    this.haloMat ??= flat(new THREE.MeshStandardMaterial({ roughness: 1, vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide }), 1);
+    this.haloMat.color.set(this.env?.halo || '#b9a658');
+    const halo = new THREE.Mesh(hg, this.haloMat); halo.receiveShadow = true; this.pads.add(halo);
     const padMat = flat(new THREE.MeshStandardMaterial({ color: 0xb9bab3, roughness: 0.85 }), 3);
     for (const b of layout.blocks) {
       const pad = new THREE.Mesh(new THREE.PlaneGeometry(b.length + 5, b.width + 5), padMat); pad.rotation.x = -Math.PI / 2;
@@ -569,6 +581,7 @@ export class PodScene {
     this.sun.color.set(this.lat > 45 ? 0xffe9d0 : 0xfff6ea);
     const gt = noiseTex(this.groundCols, { seed: 11, rows: e.paddy ? 8 : 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
     this.groundTex?.dispose(); this.groundTex = gt; this._groundLook();
+    if (this.haloMat) this.haloMat.color.set(e.halo || '#b9a658');
     if (rebuild && this.layout) { this._placeSun(); this._roads(this.layout); this._buildSurroundings(); }
     this.dirty = true;
   }
@@ -757,7 +770,7 @@ export class PodScene {
   }
 
   // ---------------------------------------------------------------- 鏡頭分鏡
-  // site：低角度全景（看得到遠山）；size：鳥瞰整個基地；cool：拉近一個 POD 的散熱模組；unit：打開一個貨櫃南牆看內部。
+  // site / size：鳥瞰整個基地（氣候分頁同規模）；pano：低角度全景（看得到遠山，?cam=pano）；cool：拉近一個 POD 的散熱模組；unit：打開一個貨櫃南牆看內部。
   _sizePose() {
     const { sx, sy, cx, cy } = this._view(); const span = Math.max(sx, sy, 30);
     const tgt = new THREE.Vector3(cx, 0, -cy);
@@ -787,8 +800,8 @@ export class PodScene {
 
   _viewPose(mode) {
     const V = (x, y, z) => new THREE.Vector3(x, y, z);
-    if (mode === 'size' || !this.pods || !this.pods.length) return this._sizePose();
-    if (mode === 'site') {
+    if (mode === 'size' || mode === 'site' || !this.pods || !this.pods.length) return this._sizePose();   // 氣候分頁與規模同一個取景
+    if (mode === 'pano') {
       const { sx, sy, cx, cy } = this._view(); const span = Math.max(sx, sy, 30);
       const d = Math.max(span * 2.6, 380), tgt = V(cx, span * 0.05, -cy);
       return { tgt, pos: tgt.clone().add(V(-0.5 * d, 0.13 * d, 0.86 * d)) };

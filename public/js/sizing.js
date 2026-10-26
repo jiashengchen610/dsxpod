@@ -99,7 +99,7 @@ export function layout(need, warnings, requested, gridRC = null, nbx = null, U =
   let blocks = [], pods = [], site, mode, nPods;
   if (need <= BLOCK_PODS) {
     const [rows, cols] = gridRC || grid(need, U);
-    nPods = rows * cols;
+    nPods = Math.min(need, rows * cols);                              // 最後一列可以不滿：數量剛好等於要求
     const [bL, bW] = blockDims(rows, cols, U);
     const oy = SUBSTATION_STRIP;                                      // 再小也要一座變電站
     for (let i = 0; i < nPods; i++) pods.push({ block: 0, x: Math.floor(i / cols) * PITCH_X, y: oy + (i % cols) * U.py });
@@ -107,22 +107,24 @@ export function layout(need, warnings, requested, gridRC = null, nbx = null, U =
                 substation: { x: 0, y: 0, l: bL, w: SUBSTATION_STRIP - 4, mw: Math.round(nPods * U.mw * 10) / 10 } }];
     site = [bL + 2 * SETBACK, bW + SUBSTATION_STRIP + 2 * SETBACK]; mode = 'detail';
   } else {
+    need = Math.min(need, Math.floor(MAX_MW / U.mw + 1e-9));          // 1 GW 上限
     const full = Math.floor(need / BLOCK_PODS), left = need % BLOCK_PODS;
-    let lastRows = 0, lastCols = 0;                                  // 最後一塊：可行列數裡挑浪費最少的（與 sizing.py 一致）
-    if (left) for (let r = Math.ceil(left / BLOCK_COLS); r <= BLOCK_ROWS; r++) { const c = Math.ceil(left / r), w = r * c - left;
-      if (!lastRows || w < lastRows * lastCols - left) { lastRows = r; lastCols = c; } }
-    const capPods = Math.floor(MAX_MW / U.mw + 1e-9);
-    if (full * BLOCK_PODS + lastRows * lastCols > capPods) { lastCols = lastRows ? Math.floor((capPods - full * BLOCK_PODS) / lastRows) : 0; if (lastCols <= 0) lastRows = lastCols = 0; }
-    const sizes = Array(full).fill([BLOCK_ROWS, BLOCK_COLS]); if (lastRows) sizes.push([lastRows, lastCols]);
+    let lastRows = 0, lastCols = 0;                                  // 最後一塊：可行列數裡挑外框浪費最少的，最後一列可以不滿（與 sizing.py 一致）
+    if (left) {
+      for (let r = Math.ceil(left / BLOCK_COLS); r <= BLOCK_ROWS; r++) { const c = Math.ceil(left / r), w = r * c - left;
+        if (!lastRows || w < lastRows * lastCols - left) { lastRows = r; lastCols = c; } }
+      lastRows = Math.ceil(left / lastCols);
+    }
+    const sizes = Array(full).fill([BLOCK_ROWS, BLOCK_COLS, BLOCK_PODS]); if (left) sizes.push([lastRows, lastCols, left]);
     const nBlocks = sizes.length;
     const [bL, bW] = blockDims(BLOCK_ROWS, BLOCK_COLS, U);
     const cellX = bL + ROAD, cellY = bW + SUBSTATION_STRIP + ROAD;
     if (nbx === null) nbx = Math.ceil(Math.sqrt(nBlocks * cellY / cellX));
     const nby = Math.ceil(nBlocks / nbx);
-    sizes.forEach(([r, c], b) => {
+    sizes.forEach(([r, c, k], b) => {
       const bx = b % nbx, by = Math.floor(b / nbx);
       const [l_, w_] = blockDims(r, c, U);
-      const ox = bx * cellX, oy = by * cellY + SUBSTATION_STRIP, k = r * c;
+      const ox = bx * cellX, oy = by * cellY + SUBSTATION_STRIP;
       blocks.push({ index: b, x: ox, y: oy, n_pods: k, rows: r, cols: c, length: l_, width: w_,
                     substation: { x: ox, y: by * cellY, l: l_, w: SUBSTATION_STRIP - 4, mw: Math.round(k * U.mw * 10) / 10 } });
       for (let i = 0; i < k; i++) pods.push({ block: b, x: ox + Math.floor(i / c) * PITCH_X, y: oy + (i % c) * U.py });

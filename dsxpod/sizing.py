@@ -4,7 +4,8 @@
   - 輸入電量 = IT 銘牌容量。1 個 POD = 7 櫃 × 230 kW = 1.61 MW（Vera Rubin NVL72 Max-P；GADU 的單元 MW 依 SKU，見 products.py）。
   - POD 間距：長邊並排 3 m（維修門淨空 1.2 m + 通道）；每個 POD 東端隔 1.5 m 接一個 20 ft 電力模組，模組端牆到下一個 POD 6 m。
   - 一個標準區塊 = 4 × 14 = 56 個單元（DSX POD 約 90 MW；GADU 依 SKU）。以內是單一陣列；超過就切區塊，區塊間 12 m 道路。每塊（含單一陣列）一側留 20 m 變電站 / 配電帶。
-  - 陣列一律補成完整矩形（不留缺角），所以配置容量 ≥ 要求容量；1 GW 上限時改成往下取整列。
+  - 單元數剛好等於要求：陣列取接近正方形的 列 × 個 外框，最後一列可以不滿（質數如 37 = 3 列 13 + 13 + 11）。
+    基地模式例外：基地是實際範圍，照基地切出完整的列（塞滿為止）。1 GW 上限時取到上限。
   - 上限：1 GW、基地 1,500 × 1,500 m（NVIDIA 稱 DSX POD 鎖定 1 GW 以下部署；再往上電網與熱島都不是篩選模型能處理的）。
   - 基地輸入時退縮 10 m。
 回傳 dict 可直接給 usd_out.build(layout=...) 與前端。
@@ -40,7 +41,7 @@ WASTE_W = 0.05                             # 補齊陣列時每多一個 POD 的
 
 
 def _grid(n, U):
-    """至少放 n 個 POD 的完整矩形陣列 (rows 沿 x, cols 沿 y)，rows*cols ≤ BLOCK_PODS；接近正方形、補的 POD 少者優先。"""
+    """放 n 個 POD 的陣列外框 (rows 沿 x, cols 沿 y)，rows*cols ≤ BLOCK_PODS；接近正方形、最後一列缺的少者優先（最後一列可以不滿）。"""
     best = None
     for rows in range(1, BLOCK_PODS + 1):
         cols = math.ceil(n / rows)
@@ -58,7 +59,7 @@ def block_dims(rows, cols, U=None):
 
 def plan(mw=None, site_l=None, site_w=None, product="dsx_pod", sku=None):
     """擇一輸入：mw（IT 銘牌）或 site_l × site_w（m）。回傳佈局。
-    陣列一律補成完整矩形（不留缺角）：所以配置的 POD 數 ≥ 需求，前端顯示「要求 X MW → 配置 Y MW」。"""
+    電量模式：單元數 = ceil(MW / 每單元 MW)，剛好排這麼多（最後一列可以不滿）；基地模式：照基地塞滿。"""
     warnings = []
     U = unit_spec(product, sku)
     if mw is not None:
@@ -135,7 +136,7 @@ def _layout(need, warnings, requested, grid=None, nbx=None, U=None):
     U = U or DSX
     if need <= BLOCK_PODS:
         rows, cols = grid or _grid(need, U)
-        n_pods = rows * cols
+        n_pods = min(need, rows * cols)                                   # 最後一列可以不滿：數量剛好等於要求
         bL, bW = block_dims(rows, cols, U)
         oy = SUBSTATION_STRIP                                              # 再小也要一座變電站（小場址前端縮成箱式變電站尺寸）
         pods = [dict(block=0, x=(i // cols) * PITCH_X, y=oy + (i % cols) * U['py']) for i in range(n_pods)]
@@ -144,26 +145,23 @@ def _layout(need, warnings, requested, grid=None, nbx=None, U=None):
         site = (bL + 2 * SETBACK, bW + SUBSTATION_STRIP + 2 * SETBACK)
         mode = "detail"
     else:
+        need = min(need, int(MAX_MW / U['mw'] + 1e-9))                     # 1 GW 上限
         full, left = divmod(need, BLOCK_PODS)
-        last_rows = last_cols = 0                                          # 最後一塊：在可行的列數裡挑浪費最少的（如 40 = 4 × 10，不是 3 × 14）
+        last_rows = last_cols = 0                                          # 最後一塊：在可行的列數裡挑外框浪費最少的（如 40 = 4 × 10），最後一列可以不滿
         if left:
             last_rows, last_cols = min(((r, math.ceil(left / r)) for r in range(math.ceil(left / BLOCK_COLS), BLOCK_ROWS + 1)), key=lambda rc: (rc[0] * rc[1] - left, rc[0]))
-        cap_pods = int(MAX_MW / U['mw'] + 1e-9)
-        if full * BLOCK_PODS + last_rows * last_cols > cap_pods:
-            last_cols = (cap_pods - full * BLOCK_PODS) // last_rows if last_rows else 0
-            if last_cols <= 0: last_rows = last_cols = 0
-        sizes = [(BLOCK_ROWS, BLOCK_COLS)] * full + ([(last_rows, last_cols)] if last_rows else [])
+            last_rows = math.ceil(left / last_cols)
+        sizes = [(BLOCK_ROWS, BLOCK_COLS, BLOCK_PODS)] * full + ([(last_rows, last_cols, left)] if left else [])
         n_blocks = len(sizes)
         bL, bW = block_dims(BLOCK_ROWS, BLOCK_COLS, U)
         cell_x, cell_y = bL + ROAD, bW + SUBSTATION_STRIP + ROAD
         if nbx is None: nbx = math.ceil(math.sqrt(n_blocks * cell_y / cell_x))
         nby = math.ceil(n_blocks / nbx)
         blocks, pods = [], []
-        for b, (r, c) in enumerate(sizes):
+        for b, (r, c, k) in enumerate(sizes):
             bx, by = b % nbx, b // nbx
             l_, w_ = block_dims(r, c, U)
             ox, oy = bx * cell_x, by * cell_y + SUBSTATION_STRIP
-            k = r * c
             blocks.append(dict(index=b, x=ox, y=oy, n_pods=k, rows=r, cols=c, length=l_, width=w_,
                                substation=dict(x=ox, y=by * cell_y, l=l_, w=SUBSTATION_STRIP - 4, mw=round(k * U['mw'], 1))))
             pods += [dict(block=b, x=ox + (i // c) * PITCH_X, y=oy + (i % c) * U['py']) for i in range(k)]
