@@ -1,0 +1,50 @@
+#usda 1.0
+(
+    defaultPrim = "RackSpec"
+    doc = "Rack spec values for the GB300 NVL72 (stand-in for Vera Rubin NVL72), written by dsxpod/rack_spec.py. Values only; no NVIDIA asset files are included."
+)
+
+over "RackSpec"
+{
+    custom float aif:core:accessibilityRequirement = 900 (
+        doc = "service clearance, mm"
+    )
+    custom string aif:core:assetClass = "Compute Rack"
+    custom float aif:core:depth = 1200 (
+        doc = "mm"
+    )
+    custom float aif:core:height = 2300 (
+        doc = "mm"
+    )
+    custom float aif:core:installationClearance = 1200 (
+        doc = "mm"
+    )
+    custom string aif:core:manufacturer = "NVIDIA"
+    custom string aif:core:modelNumber = "Grace Blackwell 300 NVL72"
+    custom float aif:core:weight = 1500 (
+        doc = "kg"
+    )
+    custom float aif:core:width = 600 (
+        doc = "mm"
+    )
+    custom float aif:spec:airCooling = 19.3 (
+        doc = "kW to air"
+    )
+    custom float aif:spec:heatCaptureRatio = 87 (
+        doc = "% of heat to liquid"
+    )
+    custom float aif:spec:liquidCooling = 116 (
+        doc = "kW to liquid"
+    )
+    custom string aif:spec:liquidSidePqCurve = "y = 0.0048x2 + 0.0617x [x=0-160 LPM]" (
+        doc = "pressure drop kPa vs LPM"
+    )
+    custom float aif:spec:maxPowerDcTdp = 136 (
+        doc = "kW"
+    )
+    custom int aif:spec:numGPUs = 72
+    custom float3[] aif:spec:requiredLiquidFlowRate = [(25, 0.55, 65.1), (30, 0.64, 76.5), (35, 0.78, 92.6), (40, 1, 117.5), (45, 1.35, 160)] (
+        doc = "(supply C, LPM per kW, LPM per rack)"
+    )
+}
+

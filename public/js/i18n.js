@@ -6,6 +6,7 @@ zh: {
   'load.libs': '載入 3D 引擎與圖表程式庫…', 'load.climate': '載入氣候資料…', 'load.grid': '載入能耗結果表…', 'load.container': '載入貨櫃模型…',
   'load.cooler': '載入散熱模組模型…', 'load.skid': '載入 800 VDC 電力中心模型…', 'load.chiller': '載入冰水機模型…',
   // ---- 產品切換 / GADU
+  'anim': '動態', 'anim.on': '開', 'anim.off': '關', 'anim.t': '散熱器上方的熱氣、狀態燈與變電站航空障礙燈（畫在 3D 上方的疊層，不會讓 3D 持續重畫）',
   'product.label': '產品', 'cool.name.chilled_water': '列間冷卻＋氣冷冰水機',
   'note.warn.gadu': '<b class="warn">⚠ 這個 PUE 不能單獨看</b>：每年約 {h} 小時（最壞年 {hmax} h）外氣太熱、冰水機容量降額後不夠（額定為 35 °C 時 1.2 倍設計排熱，每高 1 K 少 2%），模型照算耗電但實際機櫃得降載。要全年滿載需加大冰水機或選較涼的場址。',
   'gadu.cool.note': 'GADU 的散熱是固定配置：列間 CDU／列間冷卻器＋氣冷冰水機，冰水溫度由機櫃型號決定（液冷 25 °C、氣冷 15 °C）。',
@@ -97,6 +98,7 @@ en: {
   'load.libs': 'Loading 3D engine and chart library…', 'load.climate': 'Loading climate data…', 'load.grid': 'Loading energy results…', 'load.container': 'Loading container model…',
   'load.cooler': 'Loading cooling module model…', 'load.skid': 'Loading 800 VDC power center model…', 'load.chiller': 'Loading chiller model…',
   // ---- product switch / GADU
+  'anim': 'Motion', 'anim.on': 'On', 'anim.off': 'Off', 'anim.t': 'Heat plumes above the coolers, status lights and substation obstruction lights (an overlay above the 3D view; the 3D scene is not redrawn continuously)',
   'product.label': 'Product', 'cool.name.chilled_water': 'In-row cooling + air-cooled chillers',
   'note.warn.gadu': '<b class="warn">⚠ Do not read this PUE on its own</b>: for about {h} h a year (worst year {hmax} h) the ambient is so hot that the derated chiller capacity falls short (rated at 1.2 × design heat at 35 °C, −2% per K above). The model still counts the energy, but the racks would have to throttle. Larger chillers or a cooler site would close the gap.',
   'gadu.cool.note': 'GADU cooling is a fixed configuration: in-row CDUs / in-row coolers on a chilled-water loop with packaged air-cooled chillers. Chilled-water temperature follows the rack SKU (DLC 25 °C, air-cooled 15 °C).',

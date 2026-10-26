@@ -4,7 +4,7 @@ zip 內容（解壓後直接用 Composer 開 data/twin/pod.usda；超過 50 MW �
   data/twin/pod.usda            設計層（代表區塊或整個場址）＋ pod_results.usda（結果層）＋ pod_checks.usda（檢查層）
   data/twin/campus.usda         超過 50 MW 才有：區塊以 instanceable Reference 鋪滿
   data/assets/dsx_pod/*.usda    生成資產（貨櫃殼、散熱模組）
-  data/simready_assets/...      GB300 與 Vertiv 規格層（以及選擇性的 GB300 低模）
+  data/simready_assets/...      Vertiv 規格層（以及本機 full 匯出才有的 GB300 低模）；機櫃規格在 assets/dsx_pod/rack_spec.usda（自寫）
   results.json / results_annual.csv / params.json / README.txt
 結果：本機有氣象快取就跑 20 年逐時（與 engine 相同）；沒有（例如部署在 Vercel）就用預算結果表內插，README 會註明。
 """
@@ -43,7 +43,6 @@ def _copy_assets(dst_data, geometry="box"):
     (dst_data / "assets" / "dsx_pod").mkdir(parents=True, exist_ok=True)
     for f in (DATA / "assets" / "dsx_pod").glob("*.usda"): shutil.copy(f, dst_data / "assets" / "dsx_pod" / f.name)
     g = DATA / "simready_assets" / "nvidia" / "GB300"
-    shutil.copytree(g / "layers", dst_data / "simready_assets" / "nvidia" / "GB300" / "layers")
     if geometry == "full" and (g / "proxy").exists(): shutil.copytree(g / "proxy", dst_data / "simready_assets" / "nvidia" / "GB300" / "proxy")
     for a in VERTIV_ASSETS:
         src = DATA / "simready_assets" / "vertiv" / a / "layers"
@@ -157,7 +156,7 @@ PUE 20 年均 {sm['pue_mean']:.3f}　每年排不掉熱 {sm['unmet_h_mean']:.0f}
 開啟：用 USD Composer 開 {main}（upAxis Z、公尺）。/World/Plant 上有 VariantSet cooling、supply_temp、geometry；/World/Site 有 site。
 幾何：目前 geometry = {geometry}（box = 方塊；vertiv = Vertiv CDU 真實模型；full = 再加 GB300 機櫃低模）。{'這份是輕量包：執行 python fetch_real_geometry.py 下載 Vertiv 模型後，把 geometry 切成 vertiv。' if geometry == 'box' else ''}
 一次選取：Window > Collection，/World/Plant 下有 pods（完整單元）、shells、coolerModules、dryCoolers、racks、cdus、utility，右鍵 Select Contents。
-出處：Vertiv 模型與規格層來自 Hugging Face Vertiv/simready-assets（CC-BY-4.0，© Vertiv）；GB300 規格層與低模來自 NVIDIA DSX Content Pack（NGC，依其授權條款，僅供評估）。
+出處：Vertiv 模型與規格層來自 Hugging Face Vertiv/simready-assets（CC-BY-4.0，© Vertiv）；機櫃規格為 GB300 NVL72 的規格數字（rack_spec.usda，自寫，不含 NVIDIA 原始檔案）；GB300 低模只在本機 full 匯出、來自 NVIDIA DSX Content Pack（僅供內部評估，勿轉發）。
 結果來源：{source}
 檔案：results.json（摘要、逐年、佈局、檢查）、results_annual.csv、params.json（每個模型參數的 USD 來源）。
 假設：Vera Rubin NVL72 以 GB300 規格代理；貨櫃與散熱模組外殼為程式生成；再循環與園區熱島為篩選等級估算，關鍵場址需 CFD 驗證。

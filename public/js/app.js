@@ -392,6 +392,10 @@ const paint = () => new Promise(r => { let done = false; const f = () => { if (!
   let toastTimer;   // 自動降畫質時在工具列短暫提示
   scene.onQualityChange = (q, why) => { qualityUI(); if (why && why.fps) { const el = $('#qualityHint'); el.textContent = t('quality.auto', why); el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 6000); } };
   qualityUI();
+  // 環境動態開關：網址 anim= > 使用者上次選的 > 系統「減少動態」設定
+  scene.setAnim(Q.get('anim') ? Q.get('anim') !== 'off' : store.get('anim', !matchMedia('(prefers-reduced-motion: reduce)').matches));
+  const animUI = () => $$('#animSeg button').forEach(b => { b.classList.toggle('on', (b.dataset.a === 'on') === scene.animOn); b.onclick = () => { scene.setAnim(b.dataset.a === 'on'); store.set('anim', scene.animOn); animUI(); }; });
+  animUI();
   // 語言切換：靜態文字重套，動態文字全部重畫（場址卡片、單元、結果、匯出說明、3D 基地標籤）
   const langUI = () => $$('#langSeg button').forEach(b => { b.classList.toggle('on', b.dataset.lang === lang); b.onclick = () => { if (!setLang(b.dataset.lang)) return; langUI(); siteCards(); productUI(); unitFacts(); setMin('nav', document.body.classList.contains('nav-min')); update(); exportUI(); scene.setLayout(layout); }; });
   langUI();

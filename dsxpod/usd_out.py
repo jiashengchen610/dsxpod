@@ -10,7 +10,8 @@ DSX POD（NVIDIA 2026-10-21 GTC Berlin 發表）：一個貨櫃 = 7 架 Vera Rub
 幾何來源：
   - 貨櫃殼與散熱模組外殼：dsxpod/assetgen.py 程式生成的通用資產（data/assets/dsx_pod/*.usda，同源 GLB 給 three.js），
     以 Reference 疊進來。沒有公開的 DSX POD 或貨櫃 USD 資產，這是尺寸正確的替代品（ISO 40 ft 高櫃 12.192 × 2.438 × 2.896 m）。
-  - 機櫃：Reference DSX 內容包 GB300_Properties.usda + 低模 proxy_GB300.usd（Vera Rubin 尚無 SimReady 資產，GB300 當代理）。
+  - 機櫃：Reference 自寫規格層 data/assets/dsx_pod/rack_spec.usda（GB300 NVL72 規格數字，dsxpod/rack_spec.py；不散布 NVIDIA 原檔）
+    + 本機才有的低模 proxy_GB300.usd（Vera Rubin 尚無 SimReady 資產，GB300 當代理）。
   - 乾冷卻器：Vertiv MCV430（Hugging Face Vertiv/simready-assets）。本機有完整幾何（.../MCV430_6FAN/full/）就 Reference 進來；
     沒有就用同尺寸方塊。MCV430 寬 2.572 m、比貨櫃寬 13 cm；NVIDIA 實際用專門設計的模組，這裡以 layout:overhangToleranceM 容許。
   - CDU：Vertiv XDU2300 規格層 + 方塊；UPS：Vertiv APM2 規格層 + 方塊（廠區共用）。
@@ -248,12 +249,22 @@ def author_collections(stage):
     return {k: len(v) for k, v in sets.items()}
 
 
+def rack_spec_layer():
+    """自寫機櫃規格層（rack_spec.py）；缺檔時現場寫一份（唯讀環境寫不了就回 None，改用下面的內嵌後備）。"""
+    f = ASSETS / "rack_spec.usda"
+    if not f.exists():
+        try:
+            from . import rack_spec; rack_spec.write(f)
+        except OSError:
+            return None
+    return f
+
+
 def add_gb300(prim, facing):
-    props = GB300 / "layers" / "GB300_Properties.usda"; cps = GB300 / "layers" / "GB300_ConnectionPoints.usda"
-    if props.exists():
+    props = rack_spec_layer()
+    if props:
         prim.GetReferences().AddReference(rel(props))
-        if cps.exists(): prim.GetReferences().AddReference(rel(cps))
-        note = "aif:* from NVIDIA DSX Content Pack GB300_Properties.usda; stand-in for Vera Rubin NVL72 (no SimReady asset yet)"
+        note = "aif:* from rack_spec.usda (GB300 NVL72 spec values written by dsxpod/rack_spec.py); stand-in for Vera Rubin NVL72 (no SimReady asset yet)"
     else:
         attr(prim, "aif:core:assetClass", Sdf.ValueTypeNames.String, "Compute Rack")
         attr(prim, "aif:core:modelNumber", Sdf.ValueTypeNames.String, "Grace Blackwell 300 NVL72")
@@ -431,11 +442,10 @@ def build_gadu_unit(stage, path, origin, looks, sk, sku_key):
             attr(r, "aif:spec:liquidCooling", Sdf.ValueTypeNames.Float, kw * (lf if kind == "rack" else 0.0))
             attr(r, "aif:spec:airCooling", Sdf.ValueTypeNames.Float, kw * ((1.0 - lf) if kind == "rack" else 1.0))
             attr(r, "layout:facing", Sdf.ValueTypeNames.Token, "-y")
-            if kind == "rack" and nvidia_dlc:                   # NVIDIA DLC 機櫃：借 GB300 官方層的流量 / 壓降曲線（功率用本地值蓋過）
-                for lyr in ("GB300_Properties.usda", "GB300_ConnectionPoints.usda"):
-                    f = GB300 / "layers" / lyr
-                    if f.exists(): r.GetReferences().AddReference(rel(f))
-                attr(r, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "flow / pressure-drop curves proxied by GB300 official layer; power from GADU spec table")
+            if kind == "rack" and nvidia_dlc:                   # NVIDIA DLC 機櫃：借 GB300 規格層的流量 / 壓降曲線（功率用本地值蓋過）
+                f = rack_spec_layer()
+                if f: r.GetReferences().AddReference(rel(f))
+                attr(r, "aif:core:geometryNote", Sdf.ValueTypeNames.String, "flow / pressure-drop curves proxied by GB300 spec values (rack_spec.usda); power from GADU spec table")
                 add_full_geometry(r, GB300 / "proxy" / "proxy_GB300.usd", RACK_SIZE, rotate_z=-90.0, note="GADU compute rack", source="nvidia")
         elif kind == "cdu":
             n_cdu += 1

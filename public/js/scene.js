@@ -7,6 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { FxLayer } from './fx.js';
 
 const L = 12.192, W = 2.438, CH = 2.896, MH = 3.2;            // 貨櫃長寬高、散熱模組高
 const SETBACK = 10;                                             // 與 sizing 一致：佈局原點在退縮線內 10 m
@@ -309,6 +310,7 @@ export class PodScene {
     this.subParts = substationTemplate(); this.subSets = []; this.subHit = null;
     this.gravelTex = noiseTex(['#8e8f89', '#7f807a', '#a0a19a', '#727470'], { blobs: 500, rMin: 2, rMax: 10, speck: 16000, seed: 3 });
     addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); r.setSize(innerWidth, innerHeight); this.dirty = true; });
+    this.fx = new FxLayer(document.getElementById('fx')); this.fx.setLite(quality !== 'high');   // 熱氣 / 閃燈：DOM 疊層（見 fx.js）
     this.controls.addEventListener('change', () => { this.dirty = true; });
     this.controls.addEventListener('start', () => { this.tween = null; });          // 使用者一拖動就交還控制
   }
@@ -331,7 +333,7 @@ export class PodScene {
   // 執行中切換畫質（抗鋸齒在建立時決定，其餘都可即時切）
   setQuality(q, why = null) {
     if (q === this.quality) return;
-    this.quality = q; const hi = q === 'high';
+    this.quality = q; const hi = q === 'high'; this.fx.setLite(!hi);
     this.renderer.setPixelRatio(this._dpr()); this.renderer.shadowMap.enabled = hi; this.sun.castShadow = hi;
     this.sky.visible = hi; this.hemi.intensity = hi ? 0.55 : 1.15; this.renderer.toneMappingExposure = hi ? 0.62 : 0.85;   // 輕量沒有天空環境光 → 曝光拉高，色塊才乾淨
     if (hi && this.envDirty) this._bakeEnv();
@@ -421,6 +423,30 @@ export class PodScene {
     this.highlight.visible = false;
     this._applyVis(); this.dirty = true;
     if (this.cut) this._unit(true, true);
+    this._fxAnchors(layout);
+  }
+
+  setAnim(on) { this.fx.setOn(on); this.dirty = true; }
+  get animOn() { return this.fx.on; }
+
+  // 疊層錨點：散熱器頂（DSX 散熱模組 / GADU 冰水機）冒熱氣、POD 正面狀態燈、電力中心燈、變電站門型架航空障礙燈
+  _fxAnchors(layout) {
+    const A = [], gadu = !!(this.sku && Number(this.sku.chillers)), nCh = gadu ? Number(this.sku.chillers) : 0;
+    const front = new Map();                                       // 每個區塊每一欄最南邊的 POD：正面燈只放這排（後排會被前排擋住，DOM 疊層沒有遮擋）
+    this.pods.forEach(p => { const k = p.block + ':' + Math.round(p.x); if (!front.has(k) || p.y < front.get(k)) front.set(k, p.y); });
+    this.pods.forEach((p, i) => {
+      const r = ((i * 7919) % 1000) / 1000;                       // 固定的偽亂數相位，燈不會一起閃
+      if (gadu) for (let k = 0; k < nCh; k++) A.push({ key: `h${i}.${k}`, kind: 'heat', x: p.x + 0.5 + k * 6.6 + 3.0, y: 2.6, z: -(p.y + W + 2.2), m: 5.4, delay: -(r + k * 0.37) * 4.5 });
+      else A.push({ key: `h${i}`, kind: 'heat', x: p.x + L / 2, y: BASE_Y + CH + MH, z: -(p.y + W / 2), m: L * 0.85, delay: -r * 4.5 });
+      if (front.get(p.block + ':' + Math.round(p.x)) !== p.y) return;
+      A.push({ key: `s${i}`, kind: 'status', x: p.x + 0.35, y: BASE_Y + 2.55, z: -p.y + 0.07, m: 0.18, face: 1, delay: -r * 3 });
+      A.push({ key: `p${i}`, kind: 'power', x: p.x + L + SKID_GAP + 0.4, y: BASE_Y + SKID_H - 0.35, z: -p.y + 0.05, m: 0.18, face: 1, delay: -r * 2 });
+    });
+    layout.blocks.filter(b => b.substation).forEach((b, j) => {
+      const s = b.substation, k = subScale(s), ox = s.x + Math.max(0, (s.l - 40 * k) / 2), oz = -s.y - (16 - 16 * k) / 2;
+      [2.5, 24.5].forEach(gx => [-3, -13].forEach(gz => A.push({ key: `b${j}.${gx}.${gz}`, kind: 'beacon', x: ox + gx * k, y: 9.25 * k, z: oz + gz * k, m: 0.3, delay: 0 })));
+    });
+    this.fx.setAnchors(A);
   }
 
   // 基地鋪面（礫石）+ 區塊混凝土基座
@@ -845,6 +871,7 @@ export class PodScene {
         this.camera.near = near; this.camera.far = far; this.camera.updateProjectionMatrix();
       }
       this.renderer.render(this.scene, this.camera);
+      this.fx.update(this.camera, innerWidth, innerHeight, !this.cut);   // 剖面視角不畫疊層（燈會穿過貨櫃）           // 只在重畫的那一幀重新投影疊層
       // 自動降級：連續互動中量 60 個影格，中位數 > 45 ms（約 < 22 fps）就切省電畫質（只做一次）
       if (this.autoDowngrade && this.quality === 'high' && last && now - last < 250) {
         dts.push(now - last);

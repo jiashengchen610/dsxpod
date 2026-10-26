@@ -101,6 +101,7 @@ body:not(.mobile).nav-min #navTag,body:not(.mobile).data-min #dataTag{display:bl
 body.mobile{--peek:78px}
 body.mobile .toolbar{position:static;border:0;border-top:1px solid var(--border);border-radius:0;background:none;backdrop-filter:none;box-shadow:none;flex:none;padding:8px 14px}
 body.mobile .toolbar .fs,body.mobile .toolbar .fs+.sep{display:none}
+body.mobile .toolbar{flex-wrap:wrap;row-gap:8px}   /* 畫質 / 動態 / 語言三組：窄螢幕自動換行 */
 body.mobile .menu-btn{display:grid;place-items:center;left:10px;top:10px;width:44px;height:44px;font-size:20px;color:var(--text);cursor:pointer;padding:0;z-index:6}
 body.mobile .brand{left:62px;right:10px;top:10px;padding:6px 12px;max-width:none}
 body.mobile .brand-title{font-size:13.5px}
@@ -133,3 +134,24 @@ body.mobile .tip{max-width:min(260px,80vw)}
 .gadu-only{display:none}
 body.gadu .gadu-only{display:block}
 body.gadu [data-pane="cool"] > :not(.gadu-only){display:none}
+
+/* 環境動態疊層（fx.js）：只動 transform / opacity，交給合成器 */
+.fx{position:fixed;inset:0;pointer-events:none;overflow:hidden;contain:strict}
+.fx>div{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.fx>div>i{position:absolute;display:block}
+.fx-heat>i{left:-50px;bottom:0;width:100px;height:70px;border-radius:50%;opacity:0;transform-origin:50% 100%;
+  background:rgba(255,255,255,.05);-webkit-backdrop-filter:blur(3px) brightness(1.05);backdrop-filter:blur(3px) brightness(1.05);   /* 熱氣：不上色，只把背後糊掉一點 */
+  -webkit-mask-image:radial-gradient(closest-side,#000 35%,transparent);mask-image:radial-gradient(closest-side,#000 35%,transparent);
+  animation:fx-rise 4.5s ease-out infinite;animation-delay:calc(var(--d) * 1s)}
+.fx-heat>i:nth-child(2){animation-delay:calc(var(--d) * 1s - 1.5s)}
+.fx-heat>i:nth-child(3){animation-delay:calc(var(--d) * 1s - 3s)}
+@keyframes fx-rise{0%{opacity:0;transform:translate(0,30%) scale(.85,.4)}
+  15%{opacity:.8}50%{opacity:.35}
+  100%{opacity:0;transform:translate(10%,-45%) scale(1.1,.75)}}
+.fx-beacon>i,.fx-status>i,.fx-power>i{left:-8px;top:-8px;width:16px;height:16px;border-radius:50%;mix-blend-mode:screen}
+.fx-beacon>i{background:radial-gradient(closest-side,#fff 0 18%,#ff2a1a 30%,rgba(255,40,20,.35) 55%,rgba(255,40,20,0));animation:fx-flash 1.5s steps(1,end) infinite}
+@keyframes fx-flash{0%{opacity:1}12%{opacity:.08}100%{opacity:.08}}
+.fx-status>i{background:radial-gradient(closest-side,#eaffd0 0 18%,#5fe000 32%,rgba(110,230,0,.3) 58%,rgba(110,230,0,0));animation:fx-breathe 3s ease-in-out infinite;animation-delay:calc(var(--d) * 1s)}
+.fx-power>i{background:radial-gradient(closest-side,#e0f2ff 0 18%,#1e90ff 32%,rgba(30,144,255,.3) 58%,rgba(30,144,255,0));animation:fx-breathe 2s ease-in-out infinite;animation-delay:calc(var(--d) * 1s)}
+@keyframes fx-breathe{0%,100%{opacity:.35}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.fx>div>i{animation-duration:0s!important}}

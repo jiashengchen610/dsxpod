@@ -11,6 +11,7 @@
 <body>
 <!-- 文字都在 js/i18n.js（data-i18n = innerHTML、data-i18n-title、data-i18n-aria）；這裡的中文只是載入 i18n 前的預設 -->
 <canvas id="scene"></canvas>
+<div id="fx" class="fx" hidden aria-hidden="true"></div>
 <div id="loading" class="loading" role="progressbar" aria-label="載入進度" data-i18n-aria="load.aria" aria-valuemin="0" aria-valuemax="100">
   <div class="ld">
     <div class="ld-title" data-i18n="app.title">DSX POD 場址模擬</div>
@@ -126,6 +127,9 @@
   <span class="sep"></span>
   <span data-i18n="quality">畫質</span>
   <div class="seg mini" id="qualitySeg"><button data-q="high" data-i18n="quality.high" data-i18n-title="quality.high.hint">高</button><button data-q="lite" data-i18n="quality.lite" data-i18n-title="quality.lite.hint">輕量</button></div>
+  <span class="sep"></span>
+  <span data-i18n="anim">動態</span>
+  <div class="seg mini" id="animSeg"><button data-a="on" data-i18n="anim.on" data-i18n-title="anim.t">開</button><button data-a="off" data-i18n="anim.off" data-i18n-title="anim.t">關</button></div>
   <span class="sep"></span>
   <div class="seg mini" id="langSeg" aria-label="語言" data-i18n-aria="lang"><button data-lang="zh">中</button><button data-lang="en">EN</button></div>
   <span class="hint toast" id="qualityHint" hidden></span>
