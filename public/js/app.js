@@ -539,8 +539,19 @@ addEventListener('pointermove', e => {
 
 let apiGeo = 'box';
 async function checkApi() {
+  // 部署版：打包時寫的靜態 data/deploy.json（CDN 檔，不叫醒 Python 函式，免費層的 Active CPU 留給匯出）；本機沒有這個檔才問 /api/health
+  try { const r = await fetch('data/deploy.json'); if (r.ok) { const d = await r.json(); apiOK = !!d.api; apiGeo = d.geometry || 'box'; exportUI(); return; } } catch {}
   try { const r = await fetch('api/health', { cache: 'no-store' }); apiOK = r.ok; if (r.ok) apiGeo = (await r.json()).geometry || 'box'; } catch { apiOK = false; }
   exportUI();
+}
+// 匯出的標準網址（參數順序與 dsxpod/server.py 的 _canonical 一致）：規模一律用單元數，基地取整數公尺 → 同一個匯出只在 CDN 算一次
+function exportUrl() {
+  const q = new URLSearchParams({ site: state.site, product: state.product });
+  if (state.product !== 'dsx_pod' && skuKey()) q.set('sku', skuKey());
+  if (state.sizeMode === 'site') { q.set('site_l', Math.round(state.siteL)); q.set('site_w', Math.round(state.siteW)); }
+  else q.set('units', layout.n_pods);
+  q.set('cooling', state.cooling); q.set('supply', state.supply);
+  return 'api/export?' + q;
 }
 function exportUI() {
   $('#exportBtn').disabled = !apiOK;
@@ -550,8 +561,8 @@ function exportUI() {
 $('#exportBtn').onclick = async () => {
   const btn = $('#exportBtn'); btn.disabled = true; const old = btn.textContent; btn.textContent = t('export.busy');
   try {
-    const body = { site: state.site, cooling: state.cooling, supply: state.supply, product: state.product, sku: skuKey(), ...(state.sizeMode === 'units' ? { mw: Math.min(state.units, maxUnits()) * unitMw() } : state.sizeMode === 'mw' ? { mw: state.mw } : { site_l: state.siteL, site_w: state.siteW }) };
-    const r = await fetch('api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch(exportUrl());
+    if (r.status === 429) throw new Error(t('export.rate'));
     if (!r.ok) throw new Error(await r.text());
     const blob = await r.blob(); const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'dsx_pod_export.zip';
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);

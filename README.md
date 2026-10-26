@@ -56,6 +56,10 @@ Every coefficient is stored in the exported USD with its source and a confidence
 
 This is a **screening tool for early-stage siting and sizing**, not a design-grade estimate. Capex is rough (±30–50%); heat island and recirculation use screening-level models and key sites need CFD; electricity prices are regional averages, not contract prices.
 
----
+## Copyright
 
-Built by Joseph Chen. The frontend and the serverless function in this repository are generated from a private working repository (`scripts/build_vercel.py`); please open an issue rather than a pull request.
+© 2026 Joseph Chen. All rights reserved.
+
+This is an unofficial project and is not affiliated with, endorsed by or sponsored by NVIDIA or GIGABYTE. NVIDIA, DSX, Omniverse, GIGABYTE, GADU and other product names are trademarks of their respective owners and are used here only to identify the products being modelled. Vertiv SimReady assets are © Vertiv and used under CC-BY-4.0.
+
+The frontend and the serverless function in this repository are generated from a private working repository (`scripts/build_vercel.py`); please open an issue rather than a pull request.

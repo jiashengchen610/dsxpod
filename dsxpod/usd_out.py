@@ -174,6 +174,12 @@ def corrugated(stage, path, length, height, z0, axis, look, depth=0.036, pitch=0
     m = UsdGeom.Mesh.Define(stage, path)
     m.CreatePointsAttr(Vt.Vec3fArray(pts)); m.CreateFaceVertexCountsAttr(counts); m.CreateFaceVertexIndicesAttr(idx)
     m.CreateDoubleSidedAttr(True); m.CreateSubdivisionSchemeAttr("none")
+    nrm = []                                                    # 平面 normals（faceVarying，每個四邊形 4 個）
+    for i in range(len(counts)):
+        a, b = 2 * i, 2 * i + 2
+        n = (pts[b] - pts[a]) ^ (pts[a + 1] - pts[a]); n = n.GetNormalized() if n.GetLength() > 1e-12 else Gf.Vec3f(0, 0, 1)
+        nrm += [n] * 4
+    m.CreateNormalsAttr(Vt.Vec3fArray(nrm)); m.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
     lo = Gf.Vec3f(*(min(p[k] for p in pts) for k in range(3))); hi = Gf.Vec3f(*(max(p[k] for p in pts) for k in range(3)))
     m.CreateExtentAttr(Vt.Vec3fArray([lo, hi]))
     m.CreateDisplayColorAttr([Gf.Vec3f(*LOOKS[look[0]]["color"])]); bind(m.GetPrim(), look[1])
@@ -284,6 +290,11 @@ def add_gb300(prim, facing):
     proxy = GB300 / "proxy" / "proxy_GB300.usd"
     add_full_geometry(prim, proxy, RACK_SIZE, rotate_z=(90.0 if facing > 0 else -90.0), note=note, source="nvidia")
     attr(prim, "layout:facing", Sdf.ValueTypeNames.Token, "+y" if facing > 0 else "-y", "front (air intake / service) side")
+
+
+# 根層 metadata：版權與出處（USD Composer 的 Layer 視窗看得到；Vertiv 資產另有 CC-BY-4.0 出處，寫在匯出 README）
+LAYER_CREDIT = {"copyright": "(c) 2026 Joseph Chen. All rights reserved.", "creator": "Joseph Chen",
+                "note": "Unofficial screening model, not affiliated with NVIDIA or GIGABYTE. https://dsxpod.vercel.app/"}
 
 
 # ---------------------------------------------------------------- 尺寸
@@ -563,6 +574,7 @@ def build(site_key="phoenix", n_pods=1, utilization=0.9, cooling="dry_only", sup
     else:
         stage = Usd.Stage.CreateNew(str(OUT))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z); UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    stage.GetRootLayer().customLayerData = LAYER_CREDIT
     world = UsdGeom.Xform.Define(stage, "/World"); stage.SetDefaultPrim(world.GetPrim())
     Usd.ModelAPI(world.GetPrim()).SetKind(Kind.Tokens.group)
 
@@ -703,6 +715,7 @@ def build_campus(layout, site_key, cooling, supply, product="dsx_pod"):
     if CAMPUS.exists(): CAMPUS.unlink()
     st = Usd.Stage.CreateNew(str(CAMPUS))
     UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.z); UsdGeom.SetStageMetersPerUnit(st, 1.0)
+    st.GetRootLayer().customLayerData = LAYER_CREDIT
     w = UsdGeom.Xform.Define(st, "/World"); st.SetDefaultPrim(w.GetPrim()); Usd.ModelAPI(w.GetPrim()).SetKind(Kind.Tokens.group)
     site = st.DefinePrim("/World/Site"); site.GetReferences().AddReference(rel(OUT), "/World/Site")
     site.GetVariantSets().GetVariantSet("site").SetVariantSelection(site_key)

@@ -250,7 +250,7 @@ function buildInterior(quality, product = null, sku = null) {
   const rackMats = [body, body, body, body, front, body];                        // BoxGeometry 面順序 +x −x +y −y +z −z；正面朝南（three +z）
   INTERIOR.rack_x.forEach((x, i) => {
     const m = own(new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.3, 1.2).translate(x + 0.3, FLOOR_Z + 1.15, -(yRow + 0.6)), rackMats),
-      { key: 'part.rack', p: { i: i + 1 }, name: `機櫃 ${i + 1}`, detail: 'Vera Rubin NVL72（GB300 規格代理）・72 GPU・NVFP4 推論 3,600 PFLOPS・液冷' });
+      { key: 'part.rack', p: { i: i + 1 }, name: `機櫃 ${i + 1}`, detail: 'Vera Rubin NVL72・230 kW（Max-P）・72 GPU・NVFP4 推論 3,600 PFLOPS・液冷' });
     G.add(m);
   });
   // 列間 CDU

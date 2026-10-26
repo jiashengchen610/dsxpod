@@ -162,6 +162,7 @@ def export_package(site="johor", mw=None, site_l=None, site_w=None, cooling="dry
                 w = csv.DictWriter(fh, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
         main = "data/twin/campus.usda" if layout["mode"] == "campus" else "data/twin/pod.usda"
         (pkg / "README.txt").write_text(f"""DSX POD 場址模型匯出（{result['generated']}）
+© 2026 Joseph Chen. All rights reserved. 非官方的篩選模型，與 NVIDIA、技嘉無關。https://dsxpod.vercel.app/
 
 產品：{pr['name']}（{sk['name']}）
 場址：{SITES[site]['name']}　規模：{layout['n_pods']} 個單位（{layout['it_mw']:g} MW IT 銘牌，{layout['n_blocks']} 區塊）　散熱：{COOLING[cooling]['label']}　供水：{SUPPLY_LABEL[supply]}
@@ -175,7 +176,7 @@ PUE 20 年均 {sm['pue_mean']:.3f}　每年排不掉熱 {sm['unmet_h_mean']:.0f}
 出處：Vertiv 模型與規格層來自 Hugging Face Vertiv/simready-assets（CC-BY-4.0，© Vertiv）；機櫃規格為 GB300 NVL72 的規格數字（rack_spec.usda，自寫，不含 NVIDIA 原始檔案）；GB300 低模只在本機 full 匯出、來自 NVIDIA DSX Content Pack（僅供內部評估，勿轉發）。
 結果來源：{source}
 檔案：results.json（摘要、逐年、佈局、檢查）、results_annual.csv、params.json（每個模型參數的 USD 來源）。
-假設：Vera Rubin NVL72 以 GB300 規格代理；貨櫃與散熱模組外殼為程式生成；再循環與園區熱島為篩選等級估算，關鍵場址需 CFD 驗證。
+假設：Vera Rubin NVL72 每櫃 230 kW（Max-P），流量與壓降曲線由 GB300 規格依功率縮放；貨櫃與散熱模組外殼為程式生成；再循環與園區熱島為篩選等級估算，關鍵場址需 CFD 驗證。
 """, encoding="utf-8")
         if geometry != "full": (pkg / "fetch_real_geometry.py").write_text(FETCH_SCRIPT, encoding="utf-8")
         buf = io.BytesIO()
