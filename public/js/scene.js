@@ -320,10 +320,12 @@ export class PodScene {
     this._boxMats ||= {
       high: { shell: new THREE.MeshStandardMaterial({ color: 0xdcdedb, roughness: 0.6, metalness: 0.15 }), cool: new THREE.MeshStandardMaterial({ color: 0x9a9fa5, roughness: 0.55, metalness: 0.35 }), rack: new THREE.MeshStandardMaterial({ color: 0x1c1c1f, roughness: 0.5, metalness: 0.6 }),
               band: new THREE.MeshStandardMaterial({ color: 0x76b900, roughness: 0.6 }), deck: new THREE.MeshStandardMaterial({ color: 0x4a4e53, roughness: 0.7, metalness: 0.3 }),
-              plinth: new THREE.MeshStandardMaterial({ color: 0xa9aaa3, roughness: 0.9 }), skid: new THREE.MeshStandardMaterial({ color: 0xd6d8d8, roughness: 0.55, metalness: 0.2 }), busway: new THREE.MeshStandardMaterial({ color: 0x1e2023, roughness: 0.7, metalness: 0.4 }) },
+              plinth: new THREE.MeshStandardMaterial({ color: 0xa9aaa3, roughness: 0.9 }), skid: new THREE.MeshStandardMaterial({ color: 0xd6d8d8, roughness: 0.55, metalness: 0.2 }), busway: new THREE.MeshStandardMaterial({ color: 0x1e2023, roughness: 0.7, metalness: 0.4 }),
+              fan: flat(new THREE.MeshStandardMaterial({ color: 0x232528, roughness: 0.6, metalness: 0.3 }), 1), fanRing: flat(new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.5, metalness: 0.4 }), 2) },
       lite: { shell: new THREE.MeshLambertMaterial({ color: 0xe8eae7 }), cool: new THREE.MeshLambertMaterial({ color: 0xa3a8ae }), rack: new THREE.MeshLambertMaterial({ color: 0x2a2a2e }),
               band: new THREE.MeshLambertMaterial({ color: 0x76b900 }), deck: new THREE.MeshLambertMaterial({ color: 0x55595e }),
-              plinth: new THREE.MeshLambertMaterial({ color: 0xb4b5ae }), skid: new THREE.MeshLambertMaterial({ color: 0xdcdedd }), busway: new THREE.MeshLambertMaterial({ color: 0x2a2c30 }) },
+              plinth: new THREE.MeshLambertMaterial({ color: 0xb4b5ae }), skid: new THREE.MeshLambertMaterial({ color: 0xdcdedd }), busway: new THREE.MeshLambertMaterial({ color: 0x2a2c30 }),
+              fan: flat(new THREE.MeshLambertMaterial({ color: 0x2c2e31 }), 1), fanRing: flat(new THREE.MeshLambertMaterial({ color: 0xc4c7ca }), 2) },
     };
     return this._boxMats[this.quality][kind];
   }
@@ -341,9 +343,9 @@ export class PodScene {
     for (const [k, parts] of [['shell', this.shellParts], ['cooler', this.coolerParts]]) (this.sets[k] || []).forEach((m, i) => { m.material = hi ? parts[i].mat : parts[i].lite; });
     (this.sets.skid || []).forEach((m, i) => { m.material = hi ? this.skidParts[i].mat : this.skidParts[i].lite; });
     (this.sets.chiller || []).forEach((m, i) => { m.material = hi ? this.chillerParts[i].mat : this.chillerParts[i].lite; });
-    if (this.sets.boxChiller) this.sets.boxChiller[0].material = this._boxMat('cool');
+    if (this.sets.boxChiller) ['cool', 'fan', 'fanRing'].forEach((k, i) => { this.sets.boxChiller[i].material = this._boxMat(k); });
     if (this.sets.boxSkid) this.sets.boxSkid[0].material = this._boxMat('skid');
-    if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.boxCool[1].material = this._boxMat('deck'); this.sets.boxBand[0].material = this._boxMat('band'); this.sets.rack[0].material = this._boxMat('rack'); }
+    if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.boxCool[1].material = this._boxMat('deck'); this.sets.boxCool[2].material = this._boxMat('fan'); this.sets.boxCool[3].material = this._boxMat('fanRing'); this.sets.boxBand[0].material = this._boxMat('band'); this.sets.rack[0].material = this._boxMat('rack'); }
     this.scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
     this._groundLook(); if (this.layout) { this._sitePads(this.layout); this._roads(this.layout); }
     this.lod = null; this.updateLod(); this._buildSurroundings(); this.dirty = true;
@@ -370,6 +372,11 @@ export class PodScene {
     this.boxBandGeo = new THREE.BoxGeometry(L + 0.03, 0.9, W + 0.03).translate(L / 2, 0.55, -W / 2);               // 綠色下段（同 GLB 的 Band，約下 1/3）
     this.boxDeckGeo = new THREE.BoxGeometry(L - 0.5, 0.08, W - 0.5).translate(L / 2, CH + MH + 0.04, -W / 2);      // 風扇面
     this.rackGeo = new THREE.BoxGeometry(0.6, 2.3, 1.2).translate(0.3, 0.1 + 1.15, -0.6);
+    // 方塊模式的風扇示意：頂板上的暗色圓盤 + 淺色外環（位置同 assetgen：散熱模組 6 個 r 0.95、冰水機 4 個 r 0.5）
+    const fans = (xs, z, y, r) => [mergeGeometries(xs.map(x => new THREE.CircleGeometry(r * 0.88, 24).rotateX(-Math.PI / 2).translate(x, y, z))),
+                                   mergeGeometries(xs.map(x => new THREE.RingGeometry(r * 0.88, r, 24).rotateX(-Math.PI / 2).translate(x, y, z)))];
+    [this.boxFanGeo, this.boxFanRingGeo] = fans([0, 1, 2, 3, 4, 5].map(i => L / 6 * (i + 0.5)), -W / 2, CH + MH + 0.081, 0.95);
+    [this.chFanGeo, this.chFanRingGeo] = fans([0, 1, 2, 3].map(i => 1.6 + (6.0 - 1.6) / 4 * (i + 0.5)), -1.2, 2.601, 0.5);
   }
 
   _alloc(cap) {
@@ -379,7 +386,7 @@ export class PodScene {
       shell: this.shellParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
       cooler: this.coolerParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap)),
       boxShell: [mk(this.boxShellGeo, this._boxMat('shell'), cap)],
-      boxCool: [mk(this.boxCoolGeo, this._boxMat('cool'), cap), mk(this.boxDeckGeo, this._boxMat('deck'), cap)],
+      boxCool: [mk(this.boxCoolGeo, this._boxMat('cool'), cap), mk(this.boxDeckGeo, this._boxMat('deck'), cap), mk(this.boxFanGeo, this._boxMat('fan'), cap), mk(this.boxFanRingGeo, this._boxMat('fanRing'), cap)],
       boxBand: [mk(this.boxBandGeo, this._boxMat('band'), cap)],
       plinth: [mk(new THREE.BoxGeometry(L - 0.4, BASE_Y, W - 0.3).translate(L / 2, -BASE_Y / 2, -W / 2), this._boxMat('plinth'), cap)],
       rack: [mk(this.rackGeo, this._boxMat('rack'), cap * 7)],
@@ -387,7 +394,7 @@ export class PodScene {
       boxSkid: [mk(this.boxSkidGeo, this._boxMat('skid'), cap)],
       skidPlinth: [mk(new THREE.BoxGeometry(SKID_L - 0.3, BASE_Y, W - 0.3).translate(SKID_L / 2, -BASE_Y / 2, -W / 2), this._boxMat('plinth'), cap)],
       chiller: this.chillerParts.map(p => mk(p.geo, this.quality === 'high' ? p.mat : p.lite, cap * 2)),
-      boxChiller: [mk(this.boxChillerGeo, this._boxMat('cool'), cap * 2)],
+      boxChiller: [mk(this.boxChillerGeo, this._boxMat('cool'), cap * 2), mk(this.chFanGeo, this._boxMat('fan'), cap * 2), mk(this.chFanRingGeo, this._boxMat('fanRing'), cap * 2)],
       busway: [mk(new THREE.BoxGeometry(SKID_GAP + 0.3, 0.2, 0.8).translate(-(SKID_GAP + 0.3) / 2 + 0.15, 0.1 - BASE_Y, -W / 2), this._boxMat('busway'), cap)],   // 800 VDC 地面線槽
     };
     this.skidPicker = this.sets.boxSkid[0]; this.chillerPicker = this.sets.boxChiller[0];
@@ -559,7 +566,9 @@ export class PodScene {
     const tgt = new THREE.Vector3(cx, 0, -cy);
     sun.target.position.copy(tgt); sun.position.copy(tgt).addScaledVector(this.sunDir, span * 2 + 300);
     const half = span * 0.75 + 30;
-    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: span * 4 + 800 }); sun.shadow.camera.updateProjectionMatrix();
+    const sfar = span * 4 + 800;
+    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: sfar }); sun.shadow.camera.updateProjectionMatrix();
+    sun.shadow.bias = -0.01 / sfar; sun.shadow.normalBias = Math.max(0.04, half * 2 / 4096 * 1.5);   // 深度偏移只留約 1 cm（原本 -0.0003 × 上千公尺 ≈ 30 cm，風扇圈等矮物件的影子會脫離底部像浮空）；條紋改用沿法線偏移（約 1.5 個陰影貼圖像素）壓掉
     const near = span * 1.2 + 500, far = Math.max(4200, span * 8);
     this.scene.fog.near = near; this.scene.fog.far = far;
   }
@@ -806,7 +815,7 @@ export class PodScene {
     const gadu = this.isGadu();
     this.sets.cooler.forEach(m => m.visible = detail && this.vis.cooler && !gadu);
     this.sets.chiller.forEach(m => m.visible = detail && gadu);
-    this.sets.boxChiller[0].visible = !detail && gadu;
+    this.sets.boxChiller.forEach(m => m.visible = !detail && gadu);
     this.sets.boxShell[0].visible = !detail && this.vis.shell;
     this.sets.boxCool.forEach(m => m.visible = !detail && this.vis.cooler && !gadu);
     this.sets.boxBand[0].visible = !detail && this.vis.shell;
