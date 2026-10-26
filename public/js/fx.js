@@ -21,6 +21,7 @@ export class FxLayer {
   setAnchors(list) { this.anchors = list; }
   setOn(on) { this.on = !!on; this.el.hidden = !this.on; if (!this.on) this._clear(); }
   setLite(lite) { this.lite = !!lite; }
+  setMoving(on) { this.el.classList.toggle('moving', !!on); }   // 移動中先藏熱氣模糊（backdrop-filter 每次重畫都要重算，手機上不便宜）
 
   _make(kind) {
     const w = document.createElement('div'); w.className = 'fx-' + kind;

@@ -22,9 +22,11 @@ const INTERIOR = { panel_x: 0.15, panel: [0.6, 0.45, 2.0], bottles_x: [0.98, 1.3
 const WALL_T = 0.04, FLOOR_Z = 0.10;
 const RACKS = INTERIOR.rack_x.map(x => [x, WALL_T + 0.02]);
 const SKID_L = 6.058, SKID_H = 2.591, SKID_GAP = 1.5;              // 每個 POD 東端的 20 ft 電力模組（與 sizing / usd_out 一致）
+const STILL_MS = 350;                                            // 停下多久後補畫高解析度定格畫面
 const BASE_Y = 0.15;                                            // 貨櫃坐在 15 cm 混凝土墩上（也避免和地面基座搶深度而閃爍）
 const DETAIL_DIST = 260;                                        // 高畫質：鏡頭距離 > 這個 → 色塊
-const ALWAYS_DETAIL = 56;                                       // 高畫質：POD 數不超過這個時，不論遠近都畫細節模型
+const ALWAYS_DETAIL = 56;
+const FAR_DIST = 900, FAR_MIN_PODS = 120;                         // 遠景：鏡頭 > 900 m 且單元 > 120 個 → 每排合成一根長條（3 m 間隙在這距離不到 1 像素）                                       // 高畫質：POD 數不超過這個時，不論遠近都畫細節模型
 // 輕量畫質一律用色塊（白色貨櫃 + 綠色腰帶 + 灰色散熱模組 + 深色風扇面），不畫降級後的細節模型
 const ACCENT = 0x76b900;
 const subScale = s => Math.max(0.4, Math.min(1, s.l / 40));     // 小陣列：變電站等比縮小（接近箱式變電站的量體）
@@ -39,14 +41,14 @@ export const ENV = {
   phoenix: { label: '熱沙漠（BWh）：礫石地、灌木與仙人掌', ground: ['#c8a376', '#b99368', '#d6b68d', '#a7855f'], veg: 'desert', density: 0.7, hill: '#9c6c4c', hillH: 2.4, turbidity: 3, rayleigh: 1.0, fog: '#e2d3ba' },
   dallas:  { label: '濕潤亞熱帶草原（Cfa）：牧草地與零星橡樹', ground: ['#8d9455', '#7f8949', '#a19f63', '#77834a'], veg: 'broad', density: 0.3, hill: null, hillH: 0, turbidity: 5, rayleigh: 1.6, fog: '#d3d7cf' },
   dublin:  { label: '溫帶海洋性（Cfb）：牧場與樹籬', ground: ['#557f3f', '#618b48', '#4b7338', '#6d9150'], veg: 'hedge', density: 0.6, hill: '#4c7a3e', hillH: 0.6, turbidity: 7, rayleigh: 3.0, fog: '#c7ced4' },
-  oslo:    { label: '冷溫帶大陸性（Dfb）：針葉林與林間空地', ground: ['#5d6c46', '#6b7a52', '#4e5d3c', '#7b805d'], veg: 'conifer', density: 1.7, hill: '#34472f', hillH: 1.3, turbidity: 4, rayleigh: 1.8, fog: '#cad2d7' },
+  oslo:    { snow: 0.3, label: '冷溫帶大陸性（Dfb）：針葉林與林間空地', ground: ['#5d6c46', '#6b7a52', '#4e5d3c', '#7b805d'], veg: 'conifer', density: 1.7, hill: '#34472f', hillH: 1.3, turbidity: 4, rayleigh: 1.8, fog: '#cad2d7' },
 };
 
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const clump = (x, z, s = 1) => 0.5 + 0.5 * Math.sin(x / (97 * s) + Math.sin(z / (131 * s)) * 2.1) * Math.cos(z / (83 * s) + Math.cos(x / (151 * s)) * 1.7);
 
 // 可無縫重複的雜訊貼圖（地面、礫石）
-function noiseTex(colors, { size = 512, blobs = 900, rMin = 8, rMax = 60, speck = 7000, seed = 7, rows = 0 } = {}) {
+function noiseTex(colors, { size = 512, blobs = 900, rMin = 8, rMax = 60, speck = 7000, seed = 7, rows = 0, snow = 0 } = {}) {
   const c = document.createElement('canvas'); c.width = c.height = size; const g = c.getContext('2d'); const r = rng(seed);
   g.fillStyle = colors[0]; g.fillRect(0, 0, size, size);
   if (rows) {                                                   // 水田 / 作物列
@@ -58,6 +60,13 @@ function noiseTex(colors, { size = 512, blobs = 900, rMin = 8, rMax = 60, speck 
     for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) { g.beginPath(); g.arc(x + dx, y + dy, rad, 0, 7); g.fill(); }
   }
   for (let i = 0; i < speck; i++) { g.globalAlpha = 0.25; g.fillStyle = r() < 0.5 ? '#000' : '#fff'; g.fillRect(r() * size, r() * size, 1 + r() * 1.5, 1 + r() * 1.5); }
+  for (let i = 0; i < snow * 200; i++) {                          // 殘雪：成群的柔邊白塊（春分前後的奧斯陸）
+    const x = r() * size, y = r() * size, rad = 4 + r() * r() * 46;   // 多數是小塊，少數大塊，減少重複感
+    for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
+      const gr = g.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad); gr.addColorStop(0, 'rgba(238,241,244,0.75)'); gr.addColorStop(0.55, 'rgba(230,234,238,0.45)'); gr.addColorStop(1, 'rgba(232,236,240,0)');
+      g.globalAlpha = 1; g.fillStyle = gr; g.beginPath(); g.arc(x + dx, y + dy, rad, 0, 7); g.fill();
+    }
+  }
   g.globalAlpha = 1;
   const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
 }
@@ -135,16 +144,17 @@ function substationTemplate() {
 }
 
 // 植被樣板：每種是若干部件（幾何、材質、是否吃 instanceColor），單位大小，實例縮放
-function vegKinds(veg) {
+function vegKinds(veg, low = false) {   // low：遠處用的低面數版本（樹冠面數約 1/4）
   const std = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9, flatShading: true, ...o });
   const trunk = std(0x5a4632);
   const leaf = std(0xffffff);                                    // 顏色由 instanceColor 給
   const K = {};
-  K.broad = [{ geo: cyl(0.22, 3.2, 0, 1.6, 0, 6), mat: trunk }, { geo: new THREE.IcosahedronGeometry(2.6, 1).scale(1, 0.85, 1).translate(0, 4.6, 0), mat: leaf, tint: true }];
-  K.conifer = [{ geo: cyl(0.18, 2, 0, 1, 0, 5), mat: trunk },
-               { geo: mergeGeometries([new THREE.ConeGeometry(2.0, 5.5, 7).translate(0, 4.3, 0), new THREE.ConeGeometry(1.4, 4, 7).translate(0, 7.2, 0)]), mat: leaf, tint: true }];
-  K.palm = [{ geo: new THREE.CylinderGeometry(0.16, 0.24, 7, 6).translate(0, 3.5, 0), mat: std(0x6e5b44) },
-            { geo: mergeGeometries(Array.from({ length: 7 }, (_, i) => new THREE.ConeGeometry(0.55, 3.6, 4).rotateZ(Math.PI / 2 + 0.35).translate(1.6, 7, 0).rotateY(i / 7 * Math.PI * 2))), mat: leaf, tint: true }];
+  K.broad = [{ geo: cyl(0.22, 3.2, 0, 1.6, 0, low ? 4 : 6), mat: trunk }, { geo: new THREE.IcosahedronGeometry(2.6, low ? 0 : 1).scale(1, 0.85, 1).translate(0, 4.6, 0), mat: leaf, tint: true }];
+  K.conifer = [{ geo: cyl(0.18, 2, 0, 1, 0, low ? 4 : 5), mat: trunk },
+               { geo: low ? new THREE.ConeGeometry(2.0, 8.5, 5).translate(0, 5.5, 0) : mergeGeometries([new THREE.ConeGeometry(2.0, 5.5, 7).translate(0, 4.3, 0), new THREE.ConeGeometry(1.4, 4, 7).translate(0, 7.2, 0)]), mat: leaf, tint: true }];
+  const fr = low ? 4 : 7;
+  K.palm = [{ geo: new THREE.CylinderGeometry(0.16, 0.24, 7, low ? 4 : 6).translate(0, 3.5, 0), mat: std(0x6e5b44) },
+            { geo: mergeGeometries(Array.from({ length: fr }, (_, i) => new THREE.ConeGeometry(0.55, 3.6, low ? 3 : 4).rotateZ(Math.PI / 2 + 0.35).translate(1.6, 7, 0).rotateY(i / fr * Math.PI * 2))), mat: leaf, tint: true }];
   K.shrub = [{ geo: new THREE.IcosahedronGeometry(0.9, 0).scale(1.2, 0.6, 1.2).translate(0, 0.45, 0), mat: leaf, tint: true }];
   K.cactus = [{ geo: mergeGeometries([cyl(0.28, 5, 0, 2.5, 0, 8), cyl(0.18, 1.6, 0.7, 3.2, 0, 6), box(0.7, 0.3, 0.3, 0.35, 2.5, 0), cyl(0.16, 1.2, -0.6, 3.4, 0, 6), box(0.6, 0.3, 0.3, -0.3, 2.9, 0)]), mat: std(0x5d7a45) }];
   K.rock = [{ geo: new THREE.DodecahedronGeometry(1, 0).scale(1.3, 0.6, 1).translate(0, 0.3, 0), mat: std(0x8c6d55) }];
@@ -281,7 +291,9 @@ export class PodScene {
   constructor(canvas, { quality = 'high', autoDowngrade = false, labels = null } = {}) {
     this.labels = labels;                                          // 基地標籤文字（app.js 依語言給；null 用中文）
     this.canvas = canvas; this.quality = quality; this.autoDowngrade = autoDowngrade; this.dirty = true; this.onQualityChange = null;
-    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'high', powerPreference: quality === 'high' ? 'high-performance' : 'low-power' });
+    // 抗鋸齒一律開：輕量模式關掉 MSAA 時，遠處細小的貨櫃 / 圍籬 / 樹邊緣鋸齒在轉動時閃爍，看起來像顆粒；手機的分塊式 GPU 做 MSAA 幾乎不花成本。
+    // （MSAA 只能在建立時決定，所以高畫質自動降到輕量時也要先開著）
+    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: quality === 'high' ? 'high-performance' : 'low-power' });
     r.setPixelRatio(this._dpr()); r.setSize(innerWidth, innerHeight);
     r.shadowMap.enabled = quality === 'high'; r.shadowMap.type = THREE.PCFSoftShadowMap; r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = quality === 'high' ? 0.62 : 0.85;
@@ -329,16 +341,19 @@ export class PodScene {
               plinth: new THREE.MeshLambertMaterial({ color: 0xb4b5ae }), skid: new THREE.MeshLambertMaterial({ color: 0xdcdedd }), busway: new THREE.MeshLambertMaterial({ color: 0x2a2c30 }),
               fan: flat(new THREE.MeshLambertMaterial({ color: 0x2c2e31 }), 1), fanRing: flat(new THREE.MeshLambertMaterial({ color: 0xc4c7ca }), 2) },
     };
+    if (!this._boxBandSet && this.product) { const c = new THREE.Color(...(this.product.band_rgb || [0.46, 0.73, 0])); for (const q of ['high', 'lite']) this._boxMats[q].band.color.copy(c); this._boxBandSet = true; }   // 材質晚於 setProduct 建立時補上產品色帶
     return this._boxMats[this.quality][kind];
   }
 
-  _dpr() { return this.quality === 'high' ? Math.min(devicePixelRatio, 2) : Math.min(devicePixelRatio, 1); }
+  // 定格渲染：移動中（拖動、轉場、滑桿）用低解析度求流暢；停下 STILL_MS 後補畫一張高解析度的定格畫面（畫面不動時本來就不重畫，多畫一張很便宜）
+  _dpr() { return Math.min(devicePixelRatio, 2); }                                                     // 定格
+  _dprMotion() { return Math.min(devicePixelRatio, this.quality === 'high' ? 1.25 : 1); }           // 移動中
 
   // 執行中切換畫質（抗鋸齒在建立時決定，其餘都可即時切）
   setQuality(q, why = null) {
     if (q === this.quality) return;
     this.quality = q; const hi = q === 'high'; this.fx.setLite(!hi);
-    this.renderer.setPixelRatio(this._dpr()); this.renderer.shadowMap.enabled = hi; this.sun.castShadow = hi;
+    this.renderer.setPixelRatio(this._dpr()); this.lowRes = false; this.renderer.shadowMap.enabled = hi; this.sun.castShadow = hi;
     this.sky.visible = hi; this.hemi.intensity = hi ? 0.55 : 1.15; this.renderer.toneMappingExposure = hi ? 0.62 : 0.85;   // 輕量沒有天空環境光 → 曝光拉高，色塊才乾淨
     if (hi && this.envDirty) this._bakeEnv();
     this.scene.environment = hi && this.envRT ? this.envRT.texture : null;
@@ -359,7 +374,9 @@ export class PodScene {
     const grab = async (f, dy = 0) => {
       const g = await loader.loadAsync(base + f, e => onProgress && onProgress(f, e.loaded, e.total)); const parts = [];
       g.scene.updateMatrixWorld(true);
-      g.scene.traverse(o => { if (o.isMesh) { const geo = o.geometry.clone(); geo.applyMatrix4(o.matrixWorld); if (dy) geo.translate(0, dy, 0); const m = o.material.clone(); m.side = THREE.DoubleSide;
+      g.scene.traverse(o => { if (o.isMesh) { let geo = o.geometry.clone();
+        if (!geo.attributes.normal) { geo = geo.toNonIndexed(); geo.computeVertexNormals(); }   // 精簡 GLB 只存位置 + 索引：展開成每三角形獨立頂點，算面法線（= 平面著色）
+        geo.applyMatrix4(o.matrixWorld); if (dy) geo.translate(0, dy, 0); const m = o.material.clone(); m.side = THREE.DoubleSide;
         const lite = new THREE.MeshLambertMaterial({ color: m.color, map: m.map || null, side: THREE.DoubleSide, vertexColors: m.vertexColors, flatShading: m.flatShading });   // GLB 沒有法線 → GLTFLoader 開了 flatShading，要一起帶
         parts.push({ geo, mat: m, lite, name: o.name }); } });
       return parts;
@@ -425,6 +442,7 @@ export class PodScene {
     this.n = n; this.pods = pods;
     const [sx, sy] = layout.site_m; this.extent = { sx, sy, cx: sx / 2 - SETBACK, cy: sy / 2 - SETBACK };
     this._sitePads(layout);
+    this._strips(layout);
     this._substations(layout);
     this._boundary(layout);
     this._roads(layout);
@@ -547,7 +565,7 @@ export class PodScene {
     const fog = new THREE.Color(e.fog); this.scene.fog.color.copy(fog); this.scene.background = fog;
     this.hemi.color.set(e.fog); this.hemi.groundColor.set(e.ground[0]);
     this.sun.color.set(this.lat > 45 ? 0xffe9d0 : 0xfff6ea);
-    const gt = noiseTex(e.ground, { seed: 11, rows: e.paddy ? 8 : 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
+    const gt = noiseTex(e.ground, { seed: 11, rows: e.paddy ? 8 : 0, snow: e.snow || 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
     this.groundTex?.dispose(); this.groundTex = gt; this._groundLook();
     if (rebuild && this.layout) { this._placeSun(); this._roads(this.layout); this._buildSurroundings(); }
     this.dirty = true;
@@ -558,7 +576,8 @@ export class PodScene {
     if (!this.env) return;
     const lite = this.quality === 'lite', g = this.groundMat;
     g.map = lite ? null : this.groundTex; g.vertexColors = !lite;
-    if (lite) { const c = new THREE.Color(0, 0, 0); this.env.ground.forEach(h => c.add(new THREE.Color(h))); g.color.copy(c.multiplyScalar(1 / this.env.ground.length)); } else g.color.set(0xffffff);
+    if (lite) { const c = new THREE.Color(0, 0, 0); this.env.ground.forEach(h => c.add(new THREE.Color(h))); g.color.copy(c.multiplyScalar(1 / this.env.ground.length));
+      if (this.env.snow) g.color.lerp(new THREE.Color(0xdfe4e8), this.env.snow * 0.35); } else g.color.set(0xffffff);   // 殘雪：純色地面偏白
     g.needsUpdate = true; this.dirty = true;
   }
 
@@ -642,15 +661,21 @@ export class PodScene {
         for (let k = 0; k < 3; k++) if (r() < 0.5) { const t = (r() - 0.5) * len; add('broad', a === 'x' ? x + t : x, a === 'x' ? z : z + t, 0.8 + r() * 0.5, pick('broad')); }
       }
     }
-    // 建 InstancedMesh
+    // 建 InstancedMesh：近處（基地中心 near 以內）用完整樹形，遠處用低面數版本（樹是場景裡三角形最多的東西）
     const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0), C = new THREE.Color();
     const near = span * 0.5 + 260;                                     // 只讓近處樹投影
-    for (const [kind, arr] of Object.entries(lists)) {
+    const KL = vegKinds(e.veg, true), SNOW = new THREE.Color(0xeef2f5);
+    for (const [kind, all] of Object.entries(lists)) {
       if (kind === 'hedgeSeg') continue;
-      for (const part of K[kind]) {
-        const m = new THREE.InstancedMesh(part.geo, part.mat, arr.length);
-        arr.forEach(([x, z, s, ry, col], i) => { Q.setFromAxisAngle(Y, ry); M.compose(P.set(x, 0, z), Q, S.setScalar(s)); m.setMatrixAt(i, M); if (part.tint) m.setColorAt(i, C.set(col || '#5b7a36')); });
-        m.castShadow = span < 700; m.receiveShadow = false; this.surround.add(m);
+      const nearArr = all.filter(([x, z]) => Math.hypot(x - cx, z - cz) <= near), farArr = all.filter(([x, z]) => Math.hypot(x - cx, z - cz) > near);
+      for (const [arr, kinds, isNear] of [[nearArr, K, true], [farArr, KL, false]]) {
+        if (!arr.length) continue;
+        for (const part of kinds[kind]) {
+          const m = new THREE.InstancedMesh(part.geo, part.mat, arr.length);
+          arr.forEach(([x, z, s, ry, col], i) => { Q.setFromAxisAngle(Y, ry); M.compose(P.set(x, 0, z), Q, S.setScalar(s)); m.setMatrixAt(i, M);
+            if (part.tint) { C.set(col || '#5b7a36'); if (e.snow) C.lerp(SNOW, e.snow * (0.1 + 0.5 * ((i * 37) % 10) / 10)); m.setColorAt(i, C); } });   // 殘雪：樹冠混白
+          m.castShadow = isNear && span < 700; m.receiveShadow = false; this.surround.add(m);
+        }
       }
     }
     if (lists.hedgeSeg) {
@@ -750,7 +775,7 @@ export class PodScene {
     this.product = product; this.sku = sku;
     const c = new THREE.Color(...(product.band_rgb || [0.46, 0.73, 0]));
     (this.bandMats || []).forEach(m => m.color.copy(c));
-    for (const q of ['high', 'lite']) if (this._boxMats) this._boxMats[q].band.color.copy(c);
+    for (const q of ['high', 'lite']) if (this._boxMats) this._boxMats[q].band.color.copy(c); this._boxBandSet = !!this._boxMats;
     if (this.sets.shell) this._applyVis();
     this.dirty = true;
   }
@@ -818,7 +843,35 @@ export class PodScene {
 
   setVisible(v) { Object.assign(this.vis, v); this._applyVis(); this.dirty = true; }
 
+  // 遠景長條：每個區塊每一排（同一個 x）的貨櫃、散熱模組（DSX）、電力模組、冰水機（GADU）各合成一根方塊，四個網格畫完整個園區
+  _strips(layout) {
+    (this.stripMeshes || []).forEach(([m]) => { this.scene.remove(m); m.geometry.dispose(); }); this.stripMeshes = [];
+    const rows = new Map();
+    for (const p of layout.pods) { const k = p.block + ':' + p.x.toFixed(2); const r = rows.get(k); if (r) { r.y0 = Math.min(r.y0, p.y); r.y1 = Math.max(r.y1, p.y); } else rows.set(k, { x: p.x, y0: p.y, y1: p.y }); }
+    const gadu = this.isGadu(), nCh = gadu ? Number(this.sku.chillers) || 1 : 0, geos = { shell: [], cool: [], skid: [], chiller: [] };
+    const bx = (kind, x0, x1, y0, y1, z0, z1) => geos[kind].push(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0).translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2));
+    for (const r of rows.values()) {
+      const z0 = -(r.y1 + W), z1 = -r.y0;
+      bx('shell', r.x, r.x + L, BASE_Y, BASE_Y + CH, z0, z1);
+      if (!gadu) bx('cool', r.x, r.x + L, BASE_Y + CH, BASE_Y + CH + MH, z0, z1);
+      bx('skid', r.x + L + SKID_GAP, r.x + L + SKID_GAP + SKID_L, BASE_Y, BASE_Y + SKID_H, z0, z1);
+      if (gadu) bx('chiller', r.x + 0.5, r.x + 0.5 + nCh * 6.6 - 0.6, 0, 2.6, z0 - 1.0 - 2.4, z0 - 1.0);
+    }
+    for (const [kind, list] of Object.entries(geos)) {
+      if (!list.length) continue;
+      const m = new THREE.Mesh(mergeGeometries(list), this._boxMat(kind === 'chiller' ? 'cool' : kind)); m.visible = false; m.receiveShadow = true;
+      this.scene.add(m); this.stripMeshes.push([m, kind === 'chiller' ? 'cool' : kind]);
+    }
+  }
+
   _applyVis() {
+    const far = this.lod === 'far';
+    (this.stripMeshes || []).forEach(([m, kind]) => { m.visible = far; m.material = this._boxMat(kind); });
+    if (far) {                                                     // 遠景：單元層的實例全部藏起來，只畫長條
+      for (const [k, list] of Object.entries(this.sets)) if (k !== 'rack') list.forEach(m => m.visible = false);
+      this.sets.rack[0].visible = false; return;
+    }
+    for (const k of ['plinth', 'skidPlinth', 'busway']) (this.sets[k] || []).forEach(m => m.visible = true);
     const detail = this.lod === 'detail';
     this.sets.shell.forEach(m => m.visible = detail && this.vis.shell);
     const gadu = this.isGadu();
@@ -835,14 +888,21 @@ export class PodScene {
 
   updateLod() {
     const d = this.camera.position.distanceTo(this.controls.target);
-    const want = this.quality === 'lite' || (d > DETAIL_DIST && this.n > ALWAYS_DETAIL) ? 'box' : 'detail';
+    const want = d > FAR_DIST && this.n > FAR_MIN_PODS ? 'far' : this.quality === 'lite' || (d > DETAIL_DIST && this.n > ALWAYS_DETAIL) ? 'box' : 'detail';
     if (want !== this.lod) { this.lod = want; this._applyVis(); }
     return this.lod;
   }
 
+  // 滑鼠 hover：只有外框真的變了才重畫，而且是「安靜重畫」（不算移動：不降解析度、不藏熱氣）
   pick(clientX, clientY) {
+    const key = () => this.highlight.visible ? this.highlight.box.min.toArray().concat(this.highlight.box.max.toArray()).join(',') : '-';
+    const before = key(), r = this._pick(clientX, clientY);
+    if (key() !== before) this.dirtyQuiet = true;
+    return r;
+  }
+
+  _pick(clientX, clientY) {
     if (!this.picker || !this.n) return null;
-    this.dirty = true;
     const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(clientX / innerWidth * 2 - 1, -clientY / innerHeight * 2 + 1), this.camera);
     if (this.cut) {                                              // 剖面內部設備優先
       const hit = ray.intersectObject(this.cut, true).find(h => { let o = h.object; while (o && !o.userData.info) o = o.parent; return o; });
@@ -895,7 +955,14 @@ export class PodScene {
       }
       const moved = this.controls.update();
       if (this.bench > 0 && this.autoDowngrade && this.quality === 'high' && this.layout) { this.bench--; this.dirty = true; }
-      if (!moved && !this.dirty) { last = 0; return; }                    // 按需渲染：沒變化就不畫
+      const quiet = !moved && !this.dirty && this.dirtyQuiet; this.dirtyQuiet = false;   // 只有 hover 外框變了：照目前解析度重畫一張
+      if (!moved && !this.dirty && !quiet) {                             // 按需渲染：沒變化就不畫
+        last = 0;
+        if (this.lowRes && now - this.lastActive > STILL_MS) { this.lowRes = false; this.stillPending = true; this.renderer.setPixelRatio(this._dpr()); this.fx.setMoving(false); this.dirty = true; }
+        return;
+      }
+      if (this.stillPending || quiet) this.stillPending = false;            // 定格的高解析度畫面，或 hover 的安靜重畫
+      else { this.lastActive = now; if (!this.lowRes) { this.lowRes = true; this.renderer.setPixelRatio(this._dprMotion()); this.fx.setMoving(this.quality === 'lite'); } }   // 高畫質移動中熱氣照常；輕量才暫藏
       this.dirty = false;
       this.sky.position.copy(this.camera.position); const lod = this.updateLod(); onFrame && onFrame(lod);
       // 近平面隨鏡頭距離調整：遠景時把 near 推遠，深度精度集中在看得到的範圍（解決地面疊層閃爍）
