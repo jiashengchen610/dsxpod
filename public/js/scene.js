@@ -345,6 +345,7 @@ export class PodScene {
     if (this.sets.boxSkid) this.sets.boxSkid[0].material = this._boxMat('skid');
     if (this.sets.boxShell) { this.sets.boxShell[0].material = this._boxMat('shell'); this.sets.boxCool[0].material = this._boxMat('cool'); this.sets.boxCool[1].material = this._boxMat('deck'); this.sets.boxBand[0].material = this._boxMat('band'); this.sets.rack[0].material = this._boxMat('rack'); }
     this.scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
+    this._groundLook(); if (this.layout) { this._sitePads(this.layout); this._roads(this.layout); }
     this.lod = null; this.updateLod(); this._buildSurroundings(); this.dirty = true;
     this.onQualityChange && this.onQualityChange(q, why);
   }
@@ -455,8 +456,8 @@ export class PodScene {
     const { sx, sy } = this.extent;
     const req = layout.requested || {};
     const [bx, by] = req.site_l ? [req.site_l, req.site_w] : [sx, sy];
-    const t = this.gravelTex.clone(); t.needsUpdate = true; t.repeat.set(bx / 24, by / 24);
-    const site = new THREE.Mesh(new THREE.PlaneGeometry(bx, by), flat(new THREE.MeshStandardMaterial({ map: t, roughness: 1 }), 1));
+    const lite = this.quality === 'lite', t = lite ? null : this.gravelTex.clone(); if (t) { t.needsUpdate = true; t.repeat.set(bx / 24, by / 24); }
+    const site = new THREE.Mesh(new THREE.PlaneGeometry(bx, by), flat(new THREE.MeshStandardMaterial(lite ? { color: 0x8c8d87, roughness: 1 } : { map: t, roughness: 1 }), 1));   // 輕量：礫石改純色
     site.rotation.x = -Math.PI / 2; site.position.set(-SETBACK + bx / 2, 0.03, -(-SETBACK + by / 2)); site.receiveShadow = true; this.pads.add(site);
     const padMat = flat(new THREE.MeshStandardMaterial({ color: 0xb9bab3, roughness: 0.85 }), 3);
     for (const b of layout.blocks) {
@@ -531,9 +532,18 @@ export class PodScene {
     this.hemi.color.set(e.fog); this.hemi.groundColor.set(e.ground[0]);
     this.sun.color.set(this.lat > 45 ? 0xffe9d0 : 0xfff6ea);
     const gt = noiseTex(e.ground, { seed: 11, rows: e.paddy ? 8 : 0 }); gt.repeat.set(10000 / 70, 10000 / 70);
-    this.groundMat.map?.dispose(); this.groundMat.map = gt; this.groundMat.needsUpdate = true;
+    this.groundTex?.dispose(); this.groundTex = gt; this._groundLook();
     if (rebuild && this.layout) { this._placeSun(); this._roads(this.layout); this._buildSurroundings(); }
     this.dirty = true;
+  }
+
+  // 地面：高畫質 = 噪點貼圖 + 大尺度明暗；輕量 = 氣候帶的平均色（乾淨純色）
+  _groundLook() {
+    if (!this.env) return;
+    const lite = this.quality === 'lite', g = this.groundMat;
+    g.map = lite ? null : this.groundTex; g.vertexColors = !lite;
+    if (lite) { const c = new THREE.Color(0, 0, 0); this.env.ground.forEach(h => c.add(new THREE.Color(h))); g.color.copy(c.multiplyScalar(1 / this.env.ground.length)); } else g.color.set(0xffffff);
+    g.needsUpdate = true; this.dirty = true;
   }
 
   _bakeEnv() {
@@ -569,7 +579,7 @@ export class PodScene {
     const add = (kind, x, z, s, col) => { if (!onRoad(x, z)) (lists[kind] ||= []).push([x, z, s, r() * Math.PI * 2, col]); };
     const leafCols = { broad: ['#4f6e2f', '#5b7a36', '#456528', '#6a843d'], palm: ['#4f7a2a', '#5e8a32', '#43701f'], conifer: ['#2f4a2a', '#36522f', '#294226', '#3d5a33'],
                        shrub: ['#7d7a4a', '#6f7044', '#8a8455'], hedge: ['#3f6a2c', '#4a7433'], bamboo: ['#6f9442', '#7fa24c'] };
-    const pick = (k) => { const a = leafCols[k] || leafCols.broad; return a[Math.floor(r() * a.length)]; };
+    const pick = (k) => { const a = leafCols[k] || leafCols.broad, j = Math.floor(r() * a.length); return this.quality === 'lite' ? a[0] : a[j]; };   // 輕量：同種樹同一色
     // 1) 圍籬外的行道樹 / 防風林
     const lineKind = { broad: 'broad', palm: 'palm', conifer: 'conifer', hedge: 'broad', desert: null }[e.veg];
     if (lineKind) {
@@ -678,8 +688,8 @@ export class PodScene {
     const booth = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.6, 2.4), new THREE.MeshStandardMaterial({ color: 0xe3e5e0, roughness: 0.6 }));
     booth.position.set(gx + GATE + 2.2, 1.3, z0 - 2.0); booth.castShadow = true; G.add(booth);
     // 4) 廠外公路：柏油 + 標線 + 路肩，東西向延伸到霧裡；大門前一段柏油引道
-    const t = asphaltTex(); t.repeat.set(2 * ROAD_LEN / 24, 1);
-    const asphalt = flat(new THREE.MeshStandardMaterial({ map: t, roughness: 0.95 }), 3);
+    const lite = this.quality === 'lite', t = lite ? null : asphaltTex(); if (t) t.repeat.set(2 * ROAD_LEN / 24, 1);
+    const asphalt = flat(new THREE.MeshStandardMaterial(lite ? { color: 0x3b3d3f, roughness: 0.95 } : { map: t, roughness: 0.95 }), 3);   // 輕量：柏油不貼圖
     const plain = flat(new THREE.MeshStandardMaterial({ color: 0x3b3d3f, roughness: 0.95 }), 3);
     const shoulder = flat(new THREE.MeshStandardMaterial({ color: this.envKey === 'phoenix' ? 0xb7976f : 0x8a826e, roughness: 1 }), 2);
     const cx = (x0 + x1) / 2;
