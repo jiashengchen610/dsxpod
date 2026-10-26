@@ -319,9 +319,9 @@ $('#nav .tabs').addEventListener('click', e => {
   $('#navGrab').addEventListener('click', () => { if (performance.now() - navDragged > 350) navState(document.body.classList.contains('menu-open') ? 'closed' : 'half'); }); }
 // 手機上方儀表板：點一行切換展開，或上下滑（往下拉展開）
 const sheetToggle = (open) => { document.body.classList.toggle('sheet-open', open ?? !document.body.classList.contains('sheet-open')); if (document.body.classList.contains('sheet-open')) document.body.classList.remove('menu-open', 'menu-full'); setTimeout(() => Object.values(charts).forEach(c => c.resize()), 300); };
-$('#sheetHead').onclick = () => sheetToggle();
-{ let y0 = null; $('#sheetHead').addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
-  $('#sheetHead').addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy > 0); } }); }
+$('#sheetHead').onclick = () => sheetToggle(); $('#dataGrab').onclick = () => sheetToggle();
+for (const el of [$('#sheetHead'), $('#dataGrab')]) { let y0 = null; el.addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null; if (Math.abs(dy) > 25) { e.preventDefault(); sheetToggle(dy > 0); } }); }
 // 面板縮小 / 展開（桌機、平板）：各自縮成小標籤，左下按鈕一次收起或展開兩側；記住使用者的選擇。不使用瀏覽器全螢幕（平板上會干擾互動）。
 function setMin(which, on) {
   document.body.classList.toggle(which + '-min', on);

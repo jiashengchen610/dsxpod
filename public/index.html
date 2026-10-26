@@ -81,7 +81,6 @@
 <!-- 右：常駐儀表板（總算力 + 電力 / 用水 / 土地 / 造價的總量與每 EF）＋ 細節（摘要 / 能耗 / 比較 / 氣候）收合 -->
 <aside class="data panel" id="data" aria-label="結果" data-i18n-aria="data.aria">
   <div class="sheet-head" id="sheetHead" role="button" aria-label="展開報告" data-i18n-aria="sheet.open">
-    <div class="grab"></div>
     <div class="kstrip" id="kpiStrip"></div>
   </div>
   <div class="dash-head"><span data-i18n="dash.title">儀表板</span>
@@ -109,6 +108,7 @@
     <button id="exportBtn" class="primary" data-i18n="export.btn" data-i18n-title="export.t">匯出 USD 與參數（zip）</button>
     <div class="hint" id="exportHint"></div>
   </footer>
+  <div class="data-grab" id="dataGrab" role="button" aria-label="展開報告" data-i18n-aria="sheet.open"></div>
 </aside>
 
 <!-- 左下工具列：收起兩側（F）、畫質、語言。手機版由 app.js 移進設定面板底部 -->

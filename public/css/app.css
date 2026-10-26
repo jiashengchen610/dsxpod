@@ -118,8 +118,12 @@ body.mobile .nav .tabpane{flex:1}
 /* 上：一行儀表板。點一下往下展開 */
 body.mobile .data{left:0;right:0;top:0;bottom:auto;width:auto;max-height:var(--dashPeek);border-radius:0 0 14px 14px;z-index:7;transition:max-height .28s ease}
 body.mobile.sheet-open .data{max-height:min(82vh,720px)}
-body.mobile .sheet-head{display:flex;flex-direction:column;flex:none;cursor:pointer;padding:8px 10px 4px;touch-action:none}
-body.mobile .grab{order:2;width:40px;height:4px;border-radius:2px;background:#ffffff40;margin:5px auto 0}
+body.mobile .sheet-head{display:flex;flex-direction:column;flex:none;cursor:pointer;padding:8px 10px 0;touch-action:none}
+/* 把手在面板最下緣：收合時在一行儀表板下面，展開時跟著面板底部；中間內容收合時不顯示 */
+.data-grab{display:none}
+body.mobile .data-grab{display:block;flex:none;height:16px;cursor:pointer;touch-action:none;position:relative}
+body.mobile .data-grab::after{content:"";position:absolute;left:50%;top:6px;width:40px;height:4px;margin-left:-20px;border-radius:2px;background:#ffffff40}
+body.mobile:not(.sheet-open) .data > :not(.sheet-head):not(.data-grab){display:none}
 body.mobile.sheet-open .kstrip{display:none}   /* 展開後儀表板本身就有總量 */
 body.mobile .dash-head,body.mobile .more-btn{display:none}
 body.mobile .more{display:flex;flex:1}
